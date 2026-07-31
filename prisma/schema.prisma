@@ -1,0 +1,16 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Book {
+  id        String   @id @default(uuid())
+  title     String
+  format    String
+  blobUrl   String
+  createdAt DateTime @default(now())
+}
