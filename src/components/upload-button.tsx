@@ -22,15 +22,19 @@ export function UploadButton() {
     const formData = new FormData()
     formData.append("file", file)
 
-    const result = await uploadBook(formData)
+    try {
+      const result = await uploadBook(formData)
 
-    setLoading(false)
-
-    if (result.error) {
-      setError(result.error)
-    } else {
-      setSuccess(true)
-      setTimeout(() => setSuccess(false), 3000)
+      if (result.error) {
+        setError(result.error)
+      } else {
+        setSuccess(true)
+        setTimeout(() => setSuccess(false), 3000)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Upload failed")
+    } finally {
+      setLoading(false)
     }
 
     if (inputRef.current) {
