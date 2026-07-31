@@ -20,7 +20,7 @@ export async function uploadBook(formData: FormData) {
 
   try {
     const blob = await put(file.name, file, {
-      access: "public",
+      access: "private",
       addRandomSuffix: true,
     })
 
