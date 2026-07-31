@@ -1,7 +1,7 @@
 import { auth } from "@/auth"
 import { UploadButton } from "@/components/upload-button"
 import { BookGrid } from "@/components/book-grid"
-import { Button } from "@/components/ui/button"
+import { buttonVariants } from "@/components/ui/button"
 import { logOut } from "@/app/actions/auth"
 import { BookOpen, LogOut } from "lucide-react"
 import { Suspense } from "react"
@@ -27,10 +27,13 @@ export default async function Home() {
           )}
           <UploadButton />
           <form action={logOut}>
-            <Button variant="outline" size="lg">
+            <button
+              type="submit"
+              className={buttonVariants({ variant: "outline", size: "lg" })}
+            >
               <LogOut className="size-4" />
               Cerrar sesión
-            </Button>
+            </button>
           </form>
         </div>
       </header>
