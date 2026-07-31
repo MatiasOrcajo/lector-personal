@@ -42,6 +42,8 @@ export default async function ReadPage({
       url={book.blobUrl}
       format={book.format}
       title={book.title}
+      bookId={book.id}
+      initialLocation={book.lastLocation}
     />
   )
 }

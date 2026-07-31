@@ -3,6 +3,7 @@ import { UploadButton } from "@/components/upload-button"
 import { BookGrid } from "@/components/book-grid"
 import { buttonVariants } from "@/components/ui/button"
 import { logOut } from "@/app/actions/auth"
+import { ThemeToggle } from "@/components/theme-toggle"
 import { BookOpen, LogOut } from "lucide-react"
 import { Suspense } from "react"
 
@@ -25,6 +26,7 @@ export default async function Home() {
               Hola, {session.user.name}
             </span>
           )}
+          <ThemeToggle />
           <UploadButton />
           <form action={logOut}>
             <button

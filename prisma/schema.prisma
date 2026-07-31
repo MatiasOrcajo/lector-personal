@@ -54,12 +54,14 @@ model VerificationToken {
 }
 
 model Book {
-  id        String   @id @default(uuid())
-  title     String
-  format    String
-  blobUrl   String
-  userId    String
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  title        String
+  format       String
+  blobUrl      String
+  coverUrl     String?
+  lastLocation String?
+  userId       String
+  createdAt    DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

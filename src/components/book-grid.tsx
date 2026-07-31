@@ -8,6 +8,7 @@ import {
   CardContent,
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { BookCover } from "@/components/book-cover"
 import { prisma } from "@/lib/prisma"
 
 export async function BookGrid({ userId }: { userId: string }) {
@@ -34,6 +35,13 @@ export async function BookGrid({ userId }: { userId: string }) {
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {books.map((book) => (
         <Card key={book.id} size="sm">
+          <BookCover
+            id={book.id}
+            title={book.title}
+            format={book.format}
+            coverUrl={book.coverUrl}
+            blobUrl={book.blobUrl}
+          />
           <CardHeader>
             <CardTitle className="truncate text-sm">{book.title}</CardTitle>
             <CardDescription className="uppercase text-xs">
@@ -43,7 +51,7 @@ export async function BookGrid({ userId }: { userId: string }) {
           <CardContent>
             <Link href={`/read/${book.id}`}>
               <Button variant="outline" size="sm" className="w-full">
-                Read
+                {book.lastLocation ? "Continuar leyendo" : "Read"}
               </Button>
             </Link>
           </CardContent>

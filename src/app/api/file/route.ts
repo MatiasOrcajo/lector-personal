@@ -1,22 +1,6 @@
 import { auth } from "@/auth"
+import { isBlobUrl } from "@/lib/blob-url"
 import { NextRequest, NextResponse } from "next/server"
-
-const BLOB_HOST = "blob.vercel-storage.com"
-
-function isBlobUrl(value: string): URL | null {
-  try {
-    const url = new URL(value)
-    if (
-      url.protocol !== "https:" ||
-      (url.hostname !== BLOB_HOST && !url.hostname.endsWith(`.${BLOB_HOST}`))
-    ) {
-      return null
-    }
-    return url
-  } catch {
-    return null
-  }
-}
 
 export async function GET(request: NextRequest) {
   const session = await auth()
