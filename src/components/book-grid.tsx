@@ -40,7 +40,7 @@ export async function BookGrid() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Link href={`/viewer?url=${encodeURIComponent(book.blobUrl)}&title=${encodeURIComponent(book.title)}`}>
+            <Link href={`/read/${book.id}`}>
               <Button variant="outline" size="sm" className="w-full">
                 Read
               </Button>
