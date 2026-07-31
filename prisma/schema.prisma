@@ -16,6 +16,7 @@ model User {
   accounts      Account[]
   sessions      Session[]
   books         Book[]
+  folders       Folder[]
 }
 
 model Account {
@@ -56,14 +57,30 @@ model VerificationToken {
 model Book {
   id           String   @id @default(uuid())
   title        String
+  displayTitle String?
   format       String
   blobUrl      String
   coverUrl     String?
   lastLocation String?
   userId       String
+  folderId     String?
   createdAt    DateTime @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([folderId])
+}
+
+model Folder {
+  id        String   @id @default(uuid())
+  name      String
+  userId    String
+  createdAt DateTime @default(now())
+
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  books Book[]
 
   @@index([userId])
 }

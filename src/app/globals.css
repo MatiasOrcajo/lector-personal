@@ -128,3 +128,17 @@ body {
 .sepia {
   color-scheme: light;
 }
+
+/* EPUB reader: prevent horizontal scrollbar in scrolled/paginated modes */
+.epub-viewer {
+  overflow-x: hidden;
+}
+
+.epub-viewer iframe {
+  overflow-x: hidden;
+  max-width: 100%;
+}
+
+.epub-viewer div {
+  overflow-x: hidden !important;
+}

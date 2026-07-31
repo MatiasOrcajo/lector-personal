@@ -44,16 +44,58 @@ type ReaderWrapperProps = {
   initialLocation: string | null
 }
 
-const EPUB_THEMES: Record<ReaderMode, { body: string; background: string }> = {
+const EPUB_THEMES: Record<
+  ReaderMode,
+  { body: string; background: string }
+> = {
   light: { body: "#1a1a1a", background: "#ffffff" },
   dark: { body: "#e5e5e5", background: "#111318" },
   sepia: { body: "#5b4636", background: "#f4ecd8" },
+}
+
+const FLOW_CONSTRAINTS = {
+  body: { "overflow-x": "hidden" },
+  "*": { "max-width": "100%" },
+  img: { "max-width": "100%", height: "auto" },
+  svg: { "max-width": "100%", height: "auto" },
+  table: { "max-width": "100%" },
+  pre: { "max-width": "100%", "white-space": "pre-wrap", "overflow-wrap": "break-word" },
+  "div, p, h1, h2, h3, h4, h5, h6": { "max-width": "100%", "overflow-wrap": "break-word" },
 }
 
 const READER_BACKGROUNDS: Record<ReaderMode, string> = {
   light: "#ffffff",
   dark: "#111318",
   sepia: "#f4ecd8",
+}
+
+const TOC_THEMES: Record<
+  ReaderMode,
+  {
+    tocArea: { background: string }
+    tocAreaButton: { color: string; borderBottom: string }
+    tocButtonExpanded: { background: string }
+    tocButtonBar: { background: string }
+  }
+> = {
+  light: {
+    tocArea: { background: "#f7f7f7" },
+    tocAreaButton: { color: "#555", borderBottom: "1px solid #e0e0e0" },
+    tocButtonExpanded: { background: "#f7f7f7" },
+    tocButtonBar: { background: "#888" },
+  },
+  dark: {
+    tocArea: { background: "#1a1f2b" },
+    tocAreaButton: { color: "#bbb", borderBottom: "1px solid #2a2e38" },
+    tocButtonExpanded: { background: "#1a1f2b" },
+    tocButtonBar: { background: "#999" },
+  },
+  sepia: {
+    tocArea: { background: "#efe0c8" },
+    tocAreaButton: { color: "#5b4636", borderBottom: "1px solid #d8c8a8" },
+    tocButtonExpanded: { background: "#efe0c8" },
+    tocButtonBar: { background: "#9a8570" },
+  },
 }
 
 export function ReaderWrapper({
@@ -69,6 +111,7 @@ export function ReaderWrapper({
   const renditionRef = useRef<Rendition | null>(null)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const lastLocationRef = useRef<string | null>(initialLocation)
+  const [renditionReady, setRenditionReady] = useState(false)
 
   const proxiedUrl = `/api/file?url=${encodeURIComponent(url)}`
 
@@ -111,43 +154,82 @@ export function ReaderWrapper({
 
   const getRendition = useCallback((rendition: Rendition) => {
     renditionRef.current = rendition
+    setRenditionReady(true)
   }, [])
 
   useEffect(() => {
     const rendition = renditionRef.current
     if (!rendition) return
+
+    // epubjs types declare singular but runtime returns Contents[]
+    const contents = rendition.getContents() as unknown as { document?: Document; window?: { document?: Document } }[]
+    contents.forEach((content) => {
+      const doc = content.document ?? content.window?.document
+      if (!doc) return
+      try {
+        doc.querySelectorAll('[id^="epubjs-inserted-css-"]').forEach((el) => el.remove())
+      } catch {
+        // ignore cross-origin or missing document errors
+      }
+    })
+
     const { body, background } = EPUB_THEMES[mode]
     rendition.themes.register(mode, {
-      body: { color: body, background },
+      ...FLOW_CONSTRAINTS,
+      body: { color: body, background, "overflow-x": "hidden" },
       "a:link": { color: mode === "light" ? "#1a4fd8" : "#8ab4f8" },
     })
     rendition.themes.select(mode)
-  }, [mode, location])
+  }, [mode, renditionReady])
 
   useEffect(() => {
     const rendition = renditionRef.current
     if (!rendition) return
     rendition.themes.fontSize(`${settings.fontSize}%`)
-  }, [settings.fontSize, location])
+  }, [settings.fontSize])
 
   useEffect(() => {
     renditionRef.current?.flow(settings.epubFlow)
-  }, [settings.epubFlow, location])
+  }, [settings.epubFlow])
 
   const readerStyles = useMemo(
-    () => ({
-      ...ReactReaderStyle,
-      container: {
-        ...ReactReaderStyle.container,
-        backgroundColor: READER_BACKGROUNDS[mode],
-        transition: "background-color 0.3s",
-      },
-      readerArea: {
-        ...ReactReaderStyle.readerArea,
-        backgroundColor: READER_BACKGROUNDS[mode],
-        transition: "background-color 0.3s",
-      },
-    }),
+    () => {
+      const toc = TOC_THEMES[mode]
+      return {
+        ...ReactReaderStyle,
+        container: {
+          ...ReactReaderStyle.container,
+          backgroundColor: READER_BACKGROUNDS[mode],
+          transition: "background-color 0.3s",
+        },
+        readerArea: {
+          ...ReactReaderStyle.readerArea,
+          backgroundColor: READER_BACKGROUNDS[mode],
+          transition: "background-color 0.3s",
+        },
+        tocArea: {
+          ...ReactReaderStyle.tocArea,
+          background: toc.tocArea.background,
+          transition: "background-color 0.3s",
+        },
+        tocAreaButton: {
+          ...ReactReaderStyle.tocAreaButton,
+          color: toc.tocAreaButton.color,
+          borderBottom: toc.tocAreaButton.borderBottom,
+          transition: "color 0.3s, border-color 0.3s",
+        },
+        tocButtonExpanded: {
+          ...ReactReaderStyle.tocButtonExpanded,
+          background: toc.tocButtonExpanded.background,
+          transition: "background-color 0.3s",
+        },
+        tocButtonBar: {
+          ...ReactReaderStyle.tocButtonBar,
+          background: toc.tocButtonBar.background,
+          transition: "background-color 0.3s",
+        },
+      }
+    },
     [mode]
   )
 
@@ -213,7 +295,7 @@ export function ReaderWrapper({
 
       <main className="min-h-0 flex-1">
         {isEpub ? (
-          <div className="h-full">
+          <div className="epub-viewer h-full overflow-hidden">
             <ReactReader
               url={proxiedUrl}
               title={title}
