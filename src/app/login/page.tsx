@@ -26,7 +26,7 @@ export default async function LoginPage({
         Inicia sesión para acceder a tu biblioteca
       </p>
       <form action={signInWithGoogle.bind(null, callbackUrl)}>
-        <Button size="lg">
+        <Button type="submit" size="lg">
           Iniciar sesión con Google
         </Button>
       </form>
