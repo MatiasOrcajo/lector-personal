@@ -3,6 +3,8 @@ import { BookGrid } from "@/components/book-grid"
 import { BookOpen } from "lucide-react"
 import { Suspense } from "react"
 
+export const dynamic = "force-dynamic"
+
 export default function Home() {
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8">
