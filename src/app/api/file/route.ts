@@ -1,7 +1,7 @@
 import { auth } from "@/auth"
 import { NextRequest, NextResponse } from "next/server"
 
-const BLOB_HOST = "public.blob.vercel-storage.com"
+const BLOB_HOST = "blob.vercel-storage.com"
 
 function isBlobUrl(value: string): URL | null {
   try {
