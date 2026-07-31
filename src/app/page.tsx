@@ -1,11 +1,17 @@
+import { auth } from "@/auth"
 import { UploadButton } from "@/components/upload-button"
 import { BookGrid } from "@/components/book-grid"
-import { BookOpen } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { logOut } from "@/app/actions/auth"
+import { BookOpen, LogOut } from "lucide-react"
 import { Suspense } from "react"
 
 export const dynamic = "force-dynamic"
 
-export default function Home() {
+export default async function Home() {
+  const session = await auth()
+  const userId = session?.user?.id
+
   return (
     <div className="mx-auto w-full max-w-6xl px-4 py-8">
       <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -13,7 +19,20 @@ export default function Home() {
           <BookOpen className="size-6 text-primary" />
           <h1 className="text-xl font-semibold">Lector Personal</h1>
         </div>
-        <UploadButton />
+        <div className="flex flex-wrap items-center gap-3">
+          {session?.user?.name && (
+            <span className="text-sm text-muted-foreground">
+              Hola, {session.user.name}
+            </span>
+          )}
+          <UploadButton />
+          <form action={logOut}>
+            <Button variant="outline" size="lg">
+              <LogOut className="size-4" />
+              Cerrar sesión
+            </Button>
+          </form>
+        </div>
       </header>
 
       <section>
@@ -30,7 +49,7 @@ export default function Home() {
             </div>
           }
         >
-          <BookGrid />
+          {userId ? <BookGrid userId={userId} /> : null}
         </Suspense>
       </section>
     </div>

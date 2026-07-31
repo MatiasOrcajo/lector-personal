@@ -3,10 +3,17 @@
 import { put } from "@vercel/blob"
 import { revalidatePath } from "next/cache"
 import { prisma } from "@/lib/prisma"
+import { auth } from "@/auth"
 
 const ALLOWED_FORMATS = ["pdf", "epub"]
 
 export async function uploadBook(formData: FormData) {
+  const session = await auth()
+  const userId = session?.user?.id
+  if (!userId) {
+    return { error: "Unauthorized" }
+  }
+
   const file = formData.get("file") as File | null
 
   if (!file) {
@@ -29,6 +36,7 @@ export async function uploadBook(formData: FormData) {
         title: file.name,
         format: extension as "pdf" | "epub",
         blobUrl: blob.url,
+        userId,
       },
     })
 

@@ -33,6 +33,8 @@ export function ReaderWrapper({
 }) {
   const [location, setLocation] = useState<string | null>(null)
 
+  const proxiedUrl = `/api/file?url=${encodeURIComponent(url)}`
+
   const locationChanged = useCallback((loc: string) => {
     setLocation(loc)
   }, [])
@@ -53,7 +55,7 @@ export function ReaderWrapper({
         {format.toLowerCase() === "epub" ? (
           <div className="h-full">
             <ReactReader
-              url={url}
+              url={proxiedUrl}
               title={title}
               location={location}
               locationChanged={locationChanged}
@@ -71,7 +73,7 @@ export function ReaderWrapper({
             />
           </div>
         ) : format.toLowerCase() === "pdf" ? (
-          <PdfViewer url={url} />
+          <PdfViewer url={proxiedUrl} />
         ) : (
           <div className="flex h-full items-center justify-center text-muted-foreground">
             Formato no soportado: {format}

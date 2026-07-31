@@ -10,8 +10,9 @@ import {
 import { Button } from "@/components/ui/button"
 import { prisma } from "@/lib/prisma"
 
-export async function BookGrid() {
+export async function BookGrid({ userId }: { userId: string }) {
   const books = await prisma.book.findMany({
+    where: { userId },
     orderBy: { createdAt: "desc" },
   })
 

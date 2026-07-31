@@ -1,6 +1,8 @@
 import Link from "next/link"
+import { redirect } from "next/navigation"
 import { ReaderWrapper } from "@/components/reader-wrapper"
 import { prisma } from "@/lib/prisma"
+import { auth } from "@/auth"
 
 export const dynamic = "force-dynamic"
 
@@ -9,9 +11,17 @@ export default async function ReadPage({
 }: {
   params: Promise<{ id: string }>
 }) {
+  const session = await auth()
+  const userId = session?.user?.id
+  if (!userId) {
+    redirect("/login")
+  }
+
   const { id } = await params
 
-  const book = await prisma.book.findUnique({ where: { id } })
+  const book = await prisma.book.findFirst({
+    where: { id, userId },
+  })
 
   if (!book) {
     return (
