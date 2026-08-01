@@ -368,8 +368,7 @@ export function ReaderWrapper({
                         "highlight-" + h.id,
                         {
                             fill: getEffectiveHighlightColor(h.color, modeRef.current),
-                            "fill-opacity": "1",
-                            "mix-blend-mode": "multiply",
+                            "fill-opacity": "0.4",
                         }
                     )
                 }
@@ -634,13 +633,29 @@ export function ReaderWrapper({
                 const existing = doc.getElementById(styleId)
                 if (existing) existing.remove()
 
+                // 1. CREAMOS la etiqueta style SIEMPRE (sin importar el modo de lectura)
+                const style = doc.createElement("style")
+                style.id = styleId
+
+                // 2. Definimos la regla de mezcla para que el texto resalte por encima del color
+                let cssText = `
+            .epubjs-hl {
+                pointer-events: none !important;
+                mix-blend-mode: ${mode === 'dark' ? 'screen' : 'multiply'} !important;
+            }
+        `
+
+                // 3. Mantenemos tu regla original SUMÁNDOLA al CSS solo si es modo sepia
                 if (mode === "sepia") {
-                    const style = doc.createElement("style")
-                    style.id = styleId
-                    style.textContent =
-                        '.epubjs-hl[data-color="yellow"] { fill: rgba(200, 155, 40, 0.55) !important; }'
-                    doc.head.appendChild(style)
+                    cssText += `
+                .epubjs-hl[data-color="yellow"] { fill: rgba(200, 155, 40, 0.55) !important; }
+            `
                 }
+
+                // 4. Asignamos todo el CSS al elemento style y lo inyectamos
+                style.textContent = cssText
+                doc.head.appendChild(style)
+
             } catch {
                 // ignore cross-origin
             }
@@ -782,8 +797,7 @@ export function ReaderWrapper({
                     "highlight-" + clientId,
                     {
                         fill: getEffectiveHighlightColor(color, modeRef.current),
-                        "fill-opacity": "0.5",
-                        "mix-blend-mode": "multiply",
+                        "fill-opacity": "0.4",
                     }
                 )
             }
@@ -1279,7 +1293,7 @@ export function ReaderWrapper({
                                                 }}
                                             >
                         <span
-                            className="rounded-sm px-1 font-bold"
+                            className="rounded-sm px-1"
                             style={{backgroundColor: HIGHLIGHT_COLORS[h.color]}}
                         >
                           {h.text.length > 120
