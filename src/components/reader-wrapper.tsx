@@ -753,6 +753,7 @@ export function ReaderWrapper({
     const readerStyles = useMemo(
         () => {
             const toc = TOC_THEMES[mode]
+            const fullWidth = isMobile && settings.epubFlow === "scrolled"
             return {
                 ...ReactReaderStyle,
                 container: {
@@ -767,8 +768,9 @@ export function ReaderWrapper({
                 },
                 reader: {
                     ...ReactReaderStyle.reader,
-                    top: 4,
-                    bottom: 4,
+                    top: fullWidth ? 0 : 4,
+                    bottom: fullWidth ? 0 : 4,
+                    ...(fullWidth ? { left: 0, right: 0, padding: 0 } : {}),
                 },
                 titleArea: { display: "none" },
                 tocArea: {
@@ -794,7 +796,7 @@ export function ReaderWrapper({
                 },
             }
         },
-        [mode]
+        [mode, isMobile, settings.epubFlow]
     )
 
     /** @ajustar-fuente Incrementa/disminuye el tamaño de fuente dentro del
