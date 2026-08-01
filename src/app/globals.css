@@ -147,3 +147,23 @@ body {
 .epub-viewer div {
   overflow-x: hidden !important;
 }
+
+@media (max-width: 639px) {
+  .epub-viewer {
+    overflow-x: hidden;
+  }
+
+  .epub-viewer iframe {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  .epub-viewer > div > div > div {
+    left: 4px !important;
+    right: 4px !important;
+  }
+
+  .epub-viewer button[style*="position: absolute"][style*="top: 50%"] {
+    display: none !important;
+  }
+}

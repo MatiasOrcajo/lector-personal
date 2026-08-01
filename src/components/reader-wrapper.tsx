@@ -187,6 +187,15 @@ export function ReaderWrapper({
     //  @keyword hidratacion, montaje, SSR, mounted, modo-lectura
     // ──────────────────────────────────────────────
     const [mounted, setMounted] = useState(false)
+    const [isMobile, setIsMobile] = useState(false)
+
+    useEffect(() => {
+        const mql = window.matchMedia("(max-width: 639px)")
+        setIsMobile(mql.matches)
+        const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
+        mql.addEventListener("change", handler)
+        return () => mql.removeEventListener("change", handler)
+    }, [])
     const {mode} = useThemeMode()
     const modeRef = useRef(mode)
 
@@ -711,6 +720,14 @@ export function ReaderWrapper({
                     backgroundColor: READER_BACKGROUNDS[mode],
                     transition: "background-color 0.3s",
                 },
+                reader: {
+                    ...ReactReaderStyle.reader,
+                    top: 4,
+                    left: isMobile ? 4 : 50,
+                    bottom: 4,
+                    right: isMobile ? 4 : 50,
+                },
+                titleArea: { display: "none" },
                 tocArea: {
                     ...ReactReaderStyle.tocArea,
                     background: toc.tocArea.background,
@@ -734,7 +751,7 @@ export function ReaderWrapper({
                 },
             }
         },
-        [mode]
+        [mode, isMobile]
     )
 
     /** @ajustar-fuente Incrementa/disminuye el tamaño de fuente dentro del
@@ -1037,14 +1054,14 @@ export function ReaderWrapper({
              * - Botón de resaltados (abre/cierra sidebar)
              * - ThemeToggle (light/dark/sepia)
              * @keyword header, barra-superior, navegacion, controles, titulo */}
-            <header className="flex shrink-0 flex-wrap items-center gap-3 border-b bg-background/95 px-4 py-3">
+            <header className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-background/95 px-3 py-2 sm:gap-3 sm:px-4 sm:py-3">
                 <Link href="/">
-                    <Button variant="outline" size="sm">
+                    <Button variant="outline" size="sm" aria-label="Volver">
                         <ArrowLeft/>
-                        Volver
+                        <span className="hidden sm:inline">Volver</span>
                     </Button>
                 </Link>
-                <h1 className="min-w-0 flex-1 truncate text-sm font-medium sm:text-base">
+                <h1 className="min-w-0 flex-1 truncate text-xs font-medium sm:text-base">
                     {title}
                 </h1>
 
@@ -1052,6 +1069,7 @@ export function ReaderWrapper({
                  *  numérico editable, contador total, botón siguiente.
                  *  @keyword paginacion, anterior, siguiente, input-numerico */}
                 <div className="flex items-center gap-1.5">
+                    <span className="hidden sm:contents">
                     <Button
                         variant="outline"
                         size="sm"
@@ -1079,6 +1097,7 @@ export function ReaderWrapper({
                     >
                         <ChevronLeft className="size-4"/>
                     </Button>
+                    </span>
                     <input
                         type="text"
                         inputMode="numeric"
@@ -1087,12 +1106,13 @@ export function ReaderWrapper({
                         onFocus={handlePageInputFocus}
                         onBlur={handlePageInputBlur}
                         onKeyDown={handlePageInputKeyDown}
-                        className="h-7 w-12 rounded-md border border-input bg-background text-center text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                        className="h-7 w-10 rounded-md border border-input bg-background text-center text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:w-12 sm:text-sm"
                         aria-label="Ir a página"
                     />
-                    <span className="text-sm tabular-nums text-muted-foreground">
+                    <span className="text-xs tabular-nums text-muted-foreground sm:text-sm">
             / {totalPages ?? "—"}
           </span>
+                    <span className="hidden sm:contents">
                     <Button
                         variant="outline"
                         size="sm"
@@ -1121,13 +1141,14 @@ export function ReaderWrapper({
                     >
                         <ChevronRight className="size-4"/>
                     </Button>
+                    </span>
                 </div>
 
                 {/** @controles-epub Controles exclusivos para EPUB: zoom de fuente
                  *  (botones +/-) y toggle de fluidez (paginado/scroll).
                  *  @keyword EPUB, zoom, fuente, fluidez, paginado, scroll */}
                 {isEpub && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1.5 sm:gap-2">
                         <Button
                             variant="outline"
                             size="sm"
@@ -1137,7 +1158,7 @@ export function ReaderWrapper({
                         >
                             <Minus className="size-4"/>
                         </Button>
-                        <span className="w-10 text-center text-sm tabular-nums text-muted-foreground"
+                        <span className="hidden w-10 text-center text-sm tabular-nums text-muted-foreground sm:inline"
                               suppressHydrationWarning>
               {settings.fontSize}%
             </span>
@@ -1151,7 +1172,12 @@ export function ReaderWrapper({
                             <Plus className="size-4"/>
                         </Button>
                         <Button variant="outline" size="sm" onClick={toggleFlow}>
-                            {settings.epubFlow === "paginated" ? "Páginas" : "Desplazar"}
+                            <span className="hidden sm:inline">
+                                {settings.epubFlow === "paginated" ? "Páginas" : "Desplazar"}
+                            </span>
+                            <span className="sm:hidden text-xs">
+                                {settings.epubFlow === "paginated" ? "Pag" : "Scr"}
+                            </span>
                         </Button>
                     </div>
                 )}
@@ -1162,9 +1188,10 @@ export function ReaderWrapper({
                     variant="outline"
                     size="sm"
                     onClick={() => setSidebarOpen((v) => !v)}
+                    aria-label="Resaltados"
                 >
                     <Highlighter className="size-4"/>
-                    Resaltados
+                    <span className="hidden sm:inline">Resaltados</span>
                 </Button>
                 <ThemeToggle/>
             </header>
@@ -1244,7 +1271,8 @@ export function ReaderWrapper({
                                 onClick={handleReturn}
                             >
                                 <Undo2 className="size-4"/>
-                                Volver a la página anterior
+                                <span className="hidden sm:inline">Volver a la página anterior</span>
+                                <span className="sm:hidden">Volver</span>
                             </Button>
                         </div>
                     )}
@@ -1258,40 +1286,46 @@ export function ReaderWrapper({
                  *  @keyword sidebar, barra-lateral, resaltados, lista, navegar,
                  *  eliminar, color, pagina */}
                 {sidebarOpen && (
-                    <aside className="flex w-72 shrink-0 flex-col border-l bg-background">
-                        <div className="flex items-center justify-between border-b px-4 py-3">
-                            <h2 className="text-sm font-medium">Mis Resaltados</h2>
-                            <Button
-                                variant="ghost"
-                                size="icon-xs"
-                                onClick={() => setSidebarOpen(false)}
-                                aria-label="Cerrar barra lateral"
-                            >
-                                <X className="size-4"/>
-                            </Button>
-                        </div>
-                        <div className="flex-1 overflow-auto">
-                            {allHighlights.length === 0 ? (
-                                <p className="p-4 text-sm text-muted-foreground">
-                                    No hay resaltados. Selecciona texto y elige un color.
-                                </p>
-                            ) : (
-                                <ul className="divide-y">
-                                    {allHighlights.map((h) => (
-                                        <li key={h.id} className="px-4 py-3">
-                                            <button
-                                                type="button"
-                                                className="mb-1.5 w-full text-left text-sm leading-relaxed cursor-pointer"
-                                                onClick={() => {
-                                                    if (isEpub) {
-                                                        const epubH = h as EpubHighlight
-                                                        if (epubH.cfi) navigateToEpubHighlight(epubH.cfi)
-                                                    } else {
-                                                        const pdfH = h as PdfHighlight
-                                                        if (pdfH.pdfPage) navigateToPdfHighlight(pdfH.pdfPage)
-                                                    }
-                                                }}
-                                            >
+                    <>
+                        <div
+                            className="fixed inset-0 z-40 bg-black/40 sm:hidden"
+                            onClick={() => setSidebarOpen(false)}
+                            aria-hidden="true"
+                        />
+                        <aside className="fixed inset-y-0 right-0 z-50 flex w-full shrink-0 flex-col border-l bg-background sm:relative sm:w-72">
+                            <div className="flex items-center justify-between border-b px-4 py-3">
+                                <h2 className="text-sm font-medium">Mis Resaltados</h2>
+                                <Button
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    onClick={() => setSidebarOpen(false)}
+                                    aria-label="Cerrar barra lateral"
+                                >
+                                    <X className="size-4"/>
+                                </Button>
+                            </div>
+                            <div className="flex-1 overflow-auto">
+                                {allHighlights.length === 0 ? (
+                                    <p className="p-4 text-sm text-muted-foreground">
+                                        No hay resaltados. Selecciona texto y elige un color.
+                                    </p>
+                                ) : (
+                                    <ul className="divide-y">
+                                        {allHighlights.map((h) => (
+                                            <li key={h.id} className="px-4 py-3">
+                                                <button
+                                                    type="button"
+                                                    className="mb-1.5 w-full text-left text-sm leading-relaxed cursor-pointer"
+                                                    onClick={() => {
+                                                        if (isEpub) {
+                                                            const epubH = h as EpubHighlight
+                                                            if (epubH.cfi) navigateToEpubHighlight(epubH.cfi)
+                                                        } else {
+                                                            const pdfH = h as PdfHighlight
+                                                            if (pdfH.pdfPage) navigateToPdfHighlight(pdfH.pdfPage)
+                                                        }
+                                                    }}
+                                                >
                         <span
                             className="rounded-sm px-1"
                             style={{backgroundColor: HIGHLIGHT_COLORS[h.color]}}
@@ -1300,27 +1334,28 @@ export function ReaderWrapper({
                               ? h.text.slice(0, 120) + "…"
                               : h.text}
                         </span>
-                                                {"pageLabel" in h && h.pageLabel ? (
-                                                    <span className="mt-1 block text-xs text-muted-foreground">
+                                                    {"pageLabel" in h && h.pageLabel ? (
+                                                        <span className="mt-1 block text-xs text-muted-foreground">
                             {h.pageLabel}
                           </span>
-                                                ) : null}
-                                            </button>
-                                            <Button
-                                                variant="ghost"
-                                                size="icon-xs"
-                                                className="size-6 text-muted-foreground hover:text-destructive"
-                                                onClick={() => handleDeleteHighlight(h.id, "cfi" in h ? (h as EpubHighlight).cfi : null)}
-                                                aria-label="Eliminar resaltado"
-                                            >
-                                                <Trash2 className="size-3.5"/>
-                                            </Button>
-                                        </li>
-                                    ))}
-                                </ul>
-                            )}
-                        </div>
-                    </aside>
+                                                    ) : null}
+                                                </button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="icon-xs"
+                                                    className="size-6 text-muted-foreground hover:text-destructive"
+                                                    onClick={() => handleDeleteHighlight(h.id, "cfi" in h ? (h as EpubHighlight).cfi : null)}
+                                                    aria-label="Eliminar resaltado"
+                                                >
+                                                    <Trash2 className="size-3.5"/>
+                                                </Button>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </aside>
+                    </>
                 )}
             </div>
 
