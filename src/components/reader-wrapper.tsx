@@ -107,7 +107,15 @@ const EPUB_THEMES: Record<
  *  Se inyectan como parte del theme registrado en epub.js.
  *  @keyword overflow, max-width, responsive, fluidez, restricciones-css */
 const FLOW_CONSTRAINTS = {
-    body: {"overflow-x": "hidden"},
+    html: {
+        "overflow-y": "auto !important",
+        "-webkit-overflow-scrolling": "touch !important"
+    },
+    body: {
+        "overflow-x": "hidden !important",
+        "overflow-y": "auto !important",
+        "-webkit-overflow-scrolling": "touch !important"
+    },
     "*": {"max-width": "100%"},
     img: {"max-width": "100%", height: "auto"},
     svg: {"max-width": "100%", height: "auto"},
@@ -297,6 +305,9 @@ export function ReaderWrapper({
     const locationRef = useRef(location)
     const navigatingToHighlightRef = useRef(false)
     const epubHighlightsRef = useRef<EpubHighlight[]>([])
+
+    const touchStartXRef = useRef(0)
+    const touchStartYRef = useRef(0)
 
     useEffect(() => {
         locationRef.current = location
@@ -529,6 +540,33 @@ export function ReaderWrapper({
         renditionRef.current = rendition
         setRenditionReady(true)
 
+        // Detectamos dónde apoya el dedo el usuario
+        rendition.on("touchstart", (event: any) => {
+            const touch = event.changedTouches?.[0] || event.touches?.[0]
+            if (touch) {
+                touchStartXRef.current = touch.screenX
+                touchStartYRef.current = touch.screenY
+            }
+        })
+
+        // Detectamos hacia dónde deslizó al levantar el dedo
+        rendition.on("touchend", (event: any) => {
+            const touch = event.changedTouches?.[0] || event.touches?.[0]
+            if (!touch) return
+
+            const deltaX = touch.screenX - touchStartXRef.current
+            const deltaY = touch.screenY - touchStartYRef.current
+
+            // Si el movimiento es mayor a 50px y es más horizontal que vertical (swipe)
+            if (Math.abs(deltaX) > 50 && Math.abs(deltaX) > Math.abs(deltaY)) {
+                if (deltaX > 0) {
+                    rendition.prev() // Deslizó a la derecha -> Capítulo Anterior
+                } else {
+                    rendition.next() // Deslizó a la izquierda -> Capítulo Siguiente
+                }
+            }
+        })
+
         // epub.js bug: Locations._locations is undefined until generate() completes,
         // but Rendition calls locationFromCfi/percentageFromCfi internally during
         // page navigation. Pre-init as empty array so internal calls don't crash.
@@ -632,7 +670,11 @@ export function ReaderWrapper({
         const {body, background} = EPUB_THEMES[mode]
         rendition.themes.register(mode, {
             ...FLOW_CONSTRAINTS,
-            body: {color: body, background, "overflow-x": "hidden"},
+            body: {
+                ...FLOW_CONSTRAINTS.body, // ¡CRÍTICO! Esto fusiona las reglas de scroll
+                color: body,
+                background
+            },
             "a:link": {color: mode === "light" ? "#1a4fd8" : "#8ab4f8"},
         })
         rendition.themes.select(mode)
@@ -691,17 +733,17 @@ export function ReaderWrapper({
     //  @keyword epubFlow, fluidez, paginado, scroll, reflow, setTimeout,
     //  refrescar-resaltados
     // ──────────────────────────────────────────────
-    useEffect(() => {
-        const rendition = renditionRef.current
-        if (!rendition) return
-        rendition.flow(settings.epubFlow)
-
-        const timer = setTimeout(() => {
-            refreshAllAnnotations()
-        }, 250)
-
-        return () => clearTimeout(timer)
-    }, [settings.epubFlow, refreshAllAnnotations])
+    // useEffect(() => {
+    //     const rendition = renditionRef.current
+    //     if (!rendition) return
+    //     rendition.flow(settings.epubFlow)
+    //
+    //     const timer = setTimeout(() => {
+    //         refreshAllAnnotations()
+    //     }, 250)
+    //
+    //     return () => clearTimeout(timer)
+    // }, [settings.epubFlow, refreshAllAnnotations])
 
     /** @reader-styles Estilos del ReactReader fusionados con los colores del tema
      *  activo. Se recalcula con useMemo cada vez que cambia el modo de lectura.
@@ -1229,17 +1271,24 @@ export function ReaderWrapper({
                     ) : isEpub ? (
                         <div className="epub-viewer h-full overflow-hidden relative">
                             <ReactReader
+                                key={settings.epubFlow}
                                 url={proxiedUrl}
                                 title={title}
                                 location={location}
                                 locationChanged={locationChanged}
                                 getRendition={getRendition}
                                 readerStyles={readerStyles}
-                                epubOptions={{spread: "none"}}
+                                epubOptions={{
+                                    spread: "none",
+                                    // En modo scroll, usamos scrolled-doc para habilitar el desborde vertical
+                                    flow: settings.epubFlow === "scrolled" ? "scrolled-doc" : "paginated",
+                                    // CRÍTICO: Siempre "default" para que cargue solo 1 capítulo a la vez
+                                    manager: "default"
+                                }}
+                                // Apagamos el detector externo porque rompe el scroll; usamos el nativo del Paso 2
                                 swipeable={false}
                                 loadingView={
-                                    <div
-                                        className="flex h-full items-center justify-center gap-2 text-muted-foreground">
+                                    <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
                                         <LoaderCircle className="size-5 animate-spin"/>
                                         <span>Cargando EPUB…</span>
                                     </div>
@@ -1250,9 +1299,7 @@ export function ReaderWrapper({
                                     </div>
                                 }
                             />
-                            {isMobile && settings.epubFlow === "paginated" && renditionReady && (
-                                <div {...epubSwipeHandlers} className="absolute inset-0 z-50" />
-                            )}
+
                         </div>
                     ) : isPdf ? (
                         <PdfViewer
