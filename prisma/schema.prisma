@@ -8,15 +8,16 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(cuid())
+  id            String       @id @default(cuid())
   name          String?
-  email         String?   @unique
+  email         String?      @unique
   emailVerified DateTime?
   image         String?
   accounts      Account[]
   sessions      Session[]
   books         Book[]
   folders       Folder[]
+  highlights    Highlight[]
 }
 
 model Account {
@@ -55,7 +56,7 @@ model VerificationToken {
 }
 
 model Book {
-  id           String   @id @default(uuid())
+  id           String      @id @default(uuid())
   title        String
   displayTitle String?
   format       String
@@ -64,13 +65,33 @@ model Book {
   lastLocation String?
   userId       String
   folderId     String?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime    @default(now())
 
-  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  folder Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  folder     Folder?     @relation(fields: [folderId], references: [id], onDelete: SetNull)
+  highlights Highlight[]
 
   @@index([userId])
   @@index([folderId])
+}
+
+model Highlight {
+  id        String   @id @default(cuid())
+  text      String   @db.Text
+  color     String
+  cfi       String?
+  pdfPage   Int?
+  pdfRects  Json?
+  pageLabel String?
+  userId    String
+  bookId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book Book @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([bookId])
 }
 
 model Folder {

@@ -8,8 +8,12 @@ import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react"
 import {
   loadViewerSettings,
   saveViewerSettings,
+  getEffectiveHighlightColor,
   type PdfZoomMode,
+  type HighlightColor,
 } from "@/lib/viewer-settings"
+import { HighlightPopover } from "@/components/highlight-popover"
+import { useThemeMode } from "@/components/theme-provider"
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
 
@@ -24,17 +28,62 @@ const ZOOM_OPTIONS: { label: string; value: PdfZoomMode | number }[] = [
   { label: "200%", value: 2 },
 ]
 
+type HighlightRect = { x: number; y: number; width: number; height: number }
+
+export type PdfHighlight = {
+  id: string
+  text: string
+  color: HighlightColor
+  pdfRects: HighlightRect[] | null
+  pdfPage: number | null
+  pageLabel: string | null
+}
+
+export type PdfViewerApi = {
+  goToPage: (page: number) => void
+  getCurrentPage: () => number
+  getNumPages: () => number | null
+}
+
 type PdfViewerProps = {
   url: string
   initialPage?: number
   onPageChange?: (page: number) => void
+  onTotalPagesChange?: (total: number) => void
+  bookId: string
+  highlights: PdfHighlight[]
+  onCreateHighlight: (highlight: PdfHighlight) => void
+  onDeleteHighlight: (highlightId: string) => void
+  onReady: (api: PdfViewerApi) => void
 }
 
-export function PdfViewer({ url, initialPage = 1, onPageChange }: PdfViewerProps) {
+export function PdfViewer({
+  url,
+  initialPage = 1,
+  onPageChange,
+  onTotalPagesChange,
+  bookId,
+  highlights,
+  onCreateHighlight,
+  onDeleteHighlight,
+  onReady,
+}: PdfViewerProps) {
+  const { mode } = useThemeMode()
   const [numPages, setNumPages] = useState<number | null>(null)
   const [pageNumber, setPageNumber] = useState(() =>
     Math.max(1, initialPage)
   )
+  const pageNumberRef = useRef(pageNumber)
+  const numPagesRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    pageNumberRef.current = pageNumber
+  }, [pageNumber])
+
+  useEffect(() => {
+    numPagesRef.current = numPages
+  }, [numPages])
+
   const [zoomMode, setZoomMode] = useState<PdfZoomMode>(() =>
     loadViewerSettings().pdfZoomMode
   )
@@ -42,7 +91,11 @@ export function PdfViewer({ url, initialPage = 1, onPageChange }: PdfViewerProps
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null)
   const pdfRef = useRef<PDFDocumentProxy | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
+  const pageRef = useRef<HTMLDivElement | null>(null)
   const [scrollSize, setScrollSize] = useState({ width: 0, height: 0 })
+
+  const [popover, setPopover] = useState<{ x: number; y: number } | null>(null)
+  const [selectionText, setSelectionText] = useState<string>("")
 
   useEffect(() => {
     const settings = loadViewerSettings()
@@ -66,10 +119,36 @@ export function PdfViewer({ url, initialPage = 1, onPageChange }: PdfViewerProps
     return () => observer.disconnect()
   }, [])
 
+  const goTo = useCallback(
+    (page: number) => {
+      const next = Math.min(Math.max(1, page), numPages ?? 1)
+      setPageNumber(next)
+      onPageChange?.(next)
+    },
+    [numPages, onPageChange]
+  )
+
+  const apiRef = useRef<PdfViewerApi>({
+    goToPage: () => {},
+    getCurrentPage: () => pageNumberRef.current,
+    getNumPages: () => numPagesRef.current,
+  })
+
+  useEffect(() => {
+    apiRef.current.goToPage = goTo
+    apiRef.current.getCurrentPage = () => pageNumberRef.current
+    apiRef.current.getNumPages = () => numPagesRef.current
+  })
+
+  useEffect(() => {
+    onReady(apiRef.current)
+  }, [onReady])
+
   const onDocumentLoadSuccess = useCallback((pdf: PDFDocumentProxy) => {
     setNumPages(pdf.numPages)
     pdfRef.current = pdf
-  }, [])
+    onTotalPagesChange?.(pdf.numPages)
+  }, [onTotalPagesChange])
 
   useEffect(() => {
     const pdf = pdfRef.current
@@ -87,15 +166,6 @@ export function PdfViewer({ url, initialPage = 1, onPageChange }: PdfViewerProps
       cancelled = true
     }
   }, [pageNumber, numPages])
-
-  const goTo = useCallback(
-    (page: number) => {
-      const next = Math.min(Math.max(1, page), numPages ?? 1)
-      setPageNumber(next)
-      onPageChange?.(next)
-    },
-    [numPages, onPageChange]
-  )
 
   const scale = useMemo(() => {
     if (!viewport) return null
@@ -122,6 +192,145 @@ export function PdfViewer({ url, initialPage = 1, onPageChange }: PdfViewerProps
     },
     []
   )
+
+  const handleMouseUp = useCallback(() => {
+    setTimeout(() => {
+      const selection = window.getSelection()
+      if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+        return
+      }
+
+      const pageEl = pageRef.current
+      if (!pageEl || !pageEl.contains(selection.anchorNode)) return
+
+      const text = selection.toString().trim()
+      if (!text) return
+
+      const range = selection.getRangeAt(0)
+      const rects = range.getClientRects()
+      if (rects.length === 0) return
+
+      const firstRect = rects[0]
+      setPopover({
+        x: firstRect.left + firstRect.width / 2,
+        y: firstRect.top + window.scrollY,
+      })
+      setSelectionText(text)
+    }, 0)
+  }, [])
+
+  const handleColorSelect = useCallback(
+    (color: HighlightColor) => {
+      const selection = window.getSelection()
+      if (!selection || !selectionText) {
+        setPopover(null)
+        return
+      }
+
+      const pageEl = pageRef.current
+      if (!pageEl) {
+        setPopover(null)
+        return
+      }
+
+      const range = selection.getRangeAt(0)
+      const rects = range.getClientRects()
+      const pageRect = pageEl.getBoundingClientRect()
+
+      const pdfRects: HighlightRect[] = Array.from(rects).map((r) => ({
+        x: r.left - pageRect.left,
+        y: r.top - pageRect.top,
+        width: r.width,
+        height: r.height,
+      }))
+
+      import("@/app/actions/highlights").then(({ createHighlight: create }) => {
+        create({
+          bookId,
+          text: selectionText,
+          color,
+          pdfPage: pageNumber,
+          pdfRects,
+          pageLabel: pageNumber ? `Página ${pageNumber}` : undefined,
+        }).then((result) => {
+          if (result.success && result.highlight) {
+            onCreateHighlight({
+              id: result.highlight.id,
+              text: selectionText,
+              color,
+              pdfRects,
+              pdfPage: pageNumber,
+              pageLabel: result.highlight.pageLabel ?? null,
+            })
+          }
+        })
+      })
+
+      selection.removeAllRanges()
+      setPopover(null)
+      setSelectionText("")
+    },
+    [bookId, pageNumber, selectionText, onCreateHighlight]
+  )
+
+  const pageHighlights = highlights.filter((h) => h.pdfPage === pageNumber)
+
+  useEffect(() => {
+    const pageEl = pageRef.current
+    if (!pageEl || pageHighlights.length === 0) return
+
+    let observer: MutationObserver | null = null
+    let attempts = 0
+    const maxAttempts = 20
+
+    const boldHighlights = () => {
+      const textSpans = pageEl.querySelectorAll<HTMLElement>(
+        ".react-pdf__Page__textContent span"
+      )
+      if (textSpans.length === 0) return
+
+      const highlightEls = pageEl.querySelectorAll<HTMLElement>(
+        "[data-highlight-id]"
+      )
+
+      highlightEls.forEach((hlEl) => {
+        const hlBounds = hlEl.getBoundingClientRect()
+        textSpans.forEach((span) => {
+          const spanBounds = span.getBoundingClientRect()
+          const overlap = !(
+            spanBounds.right < hlBounds.left ||
+            spanBounds.left > hlBounds.right ||
+            spanBounds.bottom < hlBounds.top ||
+            spanBounds.top > hlBounds.bottom
+          )
+          if (overlap) {
+            span.style.fontWeight = "bold"
+          }
+        })
+      })
+
+      observer?.disconnect()
+    }
+
+    const tryBold = () => {
+      if (pageEl.querySelector(".react-pdf__Page__textContent")) {
+        boldHighlights()
+      } else if (attempts < maxAttempts) {
+        attempts++
+        setTimeout(tryBold, 150)
+      }
+    }
+
+    observer = new MutationObserver(() => {
+      tryBold()
+    })
+    observer.observe(pageEl, { childList: true, subtree: true })
+    tryBold()
+
+    return () => {
+      observer?.disconnect()
+    }
+  }, [pageNumber, pageHighlights, scale])
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -181,24 +390,49 @@ export function PdfViewer({ url, initialPage = 1, onPageChange }: PdfViewerProps
           }
         >
           {scale ? (
-            <Page
-              className="pdf-page"
-              pageNumber={pageNumber}
-              scale={scale}
-              renderTextLayer={false}
-              renderAnnotationLayer={false}
-              loading={
-                <div className="flex items-center gap-2 py-20 text-muted-foreground">
-                  <LoaderCircle className="size-5 animate-spin" />
-                  <span>Renderizando página…</span>
-                </div>
-              }
-              error={
-                <div className="py-20 text-center text-destructive">
-                  Error al renderizar la página
-                </div>
-              }
-            />
+            <div
+              ref={pageRef}
+              className="pdf-page relative"
+              onMouseUp={handleMouseUp}
+            >
+              <Page
+                pageNumber={pageNumber}
+                scale={scale}
+                renderTextLayer={true}
+                renderAnnotationLayer={false}
+                loading={
+                  <div className="flex items-center gap-2 py-20 text-muted-foreground">
+                    <LoaderCircle className="size-5 animate-spin" />
+                    <span>Renderizando página…</span>
+                  </div>
+                }
+                error={
+                  <div className="py-20 text-center text-destructive">
+                    Error al renderizar la página
+                  </div>
+                }
+              />
+              {pageHighlights.map((h) =>
+                h.pdfRects?.map((rect, i) => (
+                  <div
+                    key={`${h.id}-${i}`}
+                    data-highlight-id={h.id}
+                    data-highlight-color={h.color}
+                    className="pointer-events-auto absolute cursor-pointer transition-opacity hover:opacity-80"
+                    style={{
+                      left: rect.x,
+                      top: rect.y,
+                      width: rect.width,
+                      height: rect.height,
+                      backgroundColor: getEffectiveHighlightColor(h.color, mode),
+                      mixBlendMode: "multiply",
+                    }}
+                    title={h.text}
+                    onClick={() => onDeleteHighlight(h.id)}
+                  />
+                ))
+              )}
+            </div>
           ) : (
             <div className="flex items-center gap-2 py-20 text-muted-foreground">
               <LoaderCircle className="size-5 animate-spin" />
@@ -207,6 +441,19 @@ export function PdfViewer({ url, initialPage = 1, onPageChange }: PdfViewerProps
           )}
         </Document>
       </div>
+
+      {popover && (
+        <HighlightPopover
+          x={popover.x}
+          y={popover.y}
+          onSelect={handleColorSelect}
+          onClose={() => {
+            setPopover(null)
+            setSelectionText("")
+            window.getSelection()?.removeAllRanges()
+          }}
+        />
+      )}
     </div>
   )
 }

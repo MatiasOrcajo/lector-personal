@@ -121,6 +121,11 @@ body {
   background: #fff;
 }
 
+.sepia [data-highlight-color="yellow"] {
+  --hl-bg: rgba(200, 155, 40, 0.55);
+  background-color: rgba(200, 155, 40, 0.55) !important;
+}
+
 .dark {
   color-scheme: dark;
 }
