@@ -12,6 +12,7 @@ import {
 } from "react"
 import type {Rendition} from "epubjs"
 import {ReactReader, ReactReaderStyle} from "react-reader"
+import {useSwipeable} from "react-swipeable"
 import {Button} from "@/components/ui/button"
 import {ThemeToggle} from "@/components/theme-toggle"
 import {useThemeMode} from "@/components/theme-provider"
@@ -76,6 +77,7 @@ type PdfViewerProps = {
     onCreateHighlight: (highlight: PdfHighlight) => void
     onDeleteHighlight: (highlightId: string) => void
     onReady: (api: PdfViewerApi) => void
+    isMobile?: boolean
 }
 
 /** @wrapper-props Props del ReaderWrapper.
@@ -191,6 +193,7 @@ export function ReaderWrapper({
 
     useEffect(() => {
         const mql = window.matchMedia("(max-width: 639px)")
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setIsMobile(mql.matches)
         const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches)
         mql.addEventListener("change", handler)
@@ -723,9 +726,7 @@ export function ReaderWrapper({
                 reader: {
                     ...ReactReaderStyle.reader,
                     top: 4,
-                    left: isMobile ? 4 : 50,
                     bottom: 4,
-                    right: isMobile ? 4 : 50,
                 },
                 titleArea: { display: "none" },
                 tocArea: {
@@ -751,7 +752,7 @@ export function ReaderWrapper({
                 },
             }
         },
-        [mode, isMobile]
+        [mode]
     )
 
     /** @ajustar-fuente Incrementa/disminuye el tamaño de fuente dentro del
@@ -1039,6 +1040,16 @@ export function ReaderWrapper({
      *  @keyword resaltados, sidebar, lista-unificada, EPUB, PDF */
     const allHighlights = isEpub ? epubHighlights : pdfHighlights
 
+    const epubSwipeHandlers = useSwipeable({
+        onSwipedLeft: () => {
+            renditionRef.current?.next()
+        },
+        onSwipedRight: () => {
+            renditionRef.current?.prev()
+        },
+        delta: 30,
+    })
+
     // ──────────────────────────────────────────────
     //  @render Renderizado del componente.
     //  @keyword render, JSX, layout, header, main, sidebar, popover
@@ -1216,7 +1227,7 @@ export function ReaderWrapper({
                             <span>Cargando lector…</span>
                         </div>
                     ) : isEpub ? (
-                        <div className="epub-viewer h-full overflow-hidden">
+                        <div className="epub-viewer h-full overflow-hidden relative">
                             <ReactReader
                                 url={proxiedUrl}
                                 title={title}
@@ -1225,6 +1236,7 @@ export function ReaderWrapper({
                                 getRendition={getRendition}
                                 readerStyles={readerStyles}
                                 epubOptions={{spread: "none"}}
+                                swipeable={false}
                                 loadingView={
                                     <div
                                         className="flex h-full items-center justify-center gap-2 text-muted-foreground">
@@ -1238,6 +1250,9 @@ export function ReaderWrapper({
                                     </div>
                                 }
                             />
+                            {isMobile && settings.epubFlow === "paginated" && renditionReady && (
+                                <div {...epubSwipeHandlers} className="absolute inset-0 z-50" />
+                            )}
                         </div>
                     ) : isPdf ? (
                         <PdfViewer
@@ -1250,6 +1265,7 @@ export function ReaderWrapper({
                             onCreateHighlight={handlePdfCreateHighlight}
                             onDeleteHighlight={handlePdfDeleteHighlight}
                             onReady={handlePdfReady}
+                            isMobile={isMobile}
                         />
                     ) : (
                         <div className="flex h-full items-center justify-center text-muted-foreground">

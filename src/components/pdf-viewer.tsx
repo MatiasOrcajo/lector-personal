@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Document, Page, pdfjs } from "react-pdf"
 import type { PDFDocumentProxy } from "pdfjs-dist"
+import { useSwipeable } from "react-swipeable"
 import { Button } from "@/components/ui/button"
 import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react"
 import {
@@ -55,6 +56,7 @@ type PdfViewerProps = {
   onCreateHighlight: (highlight: PdfHighlight) => void
   onDeleteHighlight: (highlightId: string) => void
   onReady: (api: PdfViewerApi) => void
+  isMobile?: boolean
 }
 
 export function PdfViewer({
@@ -67,6 +69,7 @@ export function PdfViewer({
   onCreateHighlight,
   onDeleteHighlight,
   onReady,
+  isMobile = false,
 }: PdfViewerProps) {
   const { mode } = useThemeMode()
   const [numPages, setNumPages] = useState<number | null>(null)
@@ -275,6 +278,24 @@ export function PdfViewer({
 
   const pageHighlights = highlights.filter((h) => h.pdfPage === pageNumber)
 
+  const swipeHandlers = useSwipeable({
+    onSwipedLeft: () => goTo(pageNumber + 1),
+    onSwipedRight: () => goTo(pageNumber - 1),
+    delta: 30,
+    trackMouse: isMobile,
+  })
+  const { ref: swipeRef, ...swipeHandlersRest } = swipeHandlers
+
+  const mergedRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      ;(scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = node
+      if (typeof swipeRef === "function") {
+        swipeRef(node)
+      }
+    },
+    [swipeRef]
+  )
+
   useEffect(() => {
     const pageEl = pageRef.current
     if (!pageEl || pageHighlights.length === 0) return
@@ -335,6 +356,7 @@ export function PdfViewer({
   return (
     <div className="flex h-full flex-col overflow-hidden">
       <div className="flex shrink-0 flex-wrap items-center justify-center gap-3 border-b px-4 py-2">
+        <span className="hidden sm:contents">
         <Button
           variant="outline"
           size="sm"
@@ -344,9 +366,11 @@ export function PdfViewer({
           <ChevronLeft />
           Anterior
         </Button>
+        </span>
         <span className="text-sm tabular-nums text-muted-foreground">
           Página {pageNumber} de {numPages ?? "—"}
         </span>
+        <span className="hidden sm:contents">
         <Button
           variant="outline"
           size="sm"
@@ -356,6 +380,7 @@ export function PdfViewer({
           Siguiente
           <ChevronRight />
         </Button>
+        </span>
         <select
           value={String(zoomMode === "custom" ? zoom : zoomMode)}
           onChange={(e) => handleZoomChange(e.target.value)}
@@ -371,8 +396,9 @@ export function PdfViewer({
       </div>
 
       <div
-        ref={scrollRef}
+        ref={isMobile ? mergedRef : scrollRef}
         className="flex min-h-0 flex-1 flex-col items-center overflow-auto bg-muted/40 p-4"
+        {...(isMobile ? swipeHandlersRest : {})}
       >
         <Document
           file={url}
