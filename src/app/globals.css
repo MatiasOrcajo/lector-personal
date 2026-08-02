@@ -126,6 +126,10 @@ body {
   background-color: rgba(200, 155, 40, 0.55) !important;
 }
 
+.react-pdf__Page__textContent span {
+  color: transparent !important;
+}
+
 .dark {
   color-scheme: dark;
 }

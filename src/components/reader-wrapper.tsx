@@ -77,7 +77,6 @@ type PdfViewerProps = {
     onCreateHighlight: (highlight: PdfHighlight) => void
     onDeleteHighlight: (highlightId: string) => void
     onReady: (api: PdfViewerApi) => void
-    isMobile?: boolean
 }
 
 /** @wrapper-props Props del ReaderWrapper.
@@ -1314,7 +1313,6 @@ export function ReaderWrapper({
                             onCreateHighlight={handlePdfCreateHighlight}
                             onDeleteHighlight={handlePdfDeleteHighlight}
                             onReady={handlePdfReady}
-                            isMobile={isMobile}
                         />
                     ) : (
                         <div className="flex h-full items-center justify-center text-muted-foreground">

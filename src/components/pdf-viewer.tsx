@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Document, Page, pdfjs } from "react-pdf"
+import "react-pdf/dist/Page/TextLayer.css"
 import type { PDFDocumentProxy } from "pdfjs-dist"
-import { useSwipeable } from "react-swipeable"
 import { Button } from "@/components/ui/button"
 import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react"
 import {
@@ -56,7 +56,6 @@ type PdfViewerProps = {
   onCreateHighlight: (highlight: PdfHighlight) => void
   onDeleteHighlight: (highlightId: string) => void
   onReady: (api: PdfViewerApi) => void
-  isMobile?: boolean
 }
 
 export function PdfViewer({
@@ -69,7 +68,6 @@ export function PdfViewer({
   onCreateHighlight,
   onDeleteHighlight,
   onReady,
-  isMobile = false,
 }: PdfViewerProps) {
   const { mode } = useThemeMode()
   const [numPages, setNumPages] = useState<number | null>(null)
@@ -100,6 +98,10 @@ export function PdfViewer({
   const [popover, setPopover] = useState<{ x: number; y: number } | null>(null)
   const [selectionText, setSelectionText] = useState<string>("")
 
+  const wheelAccumRef = useRef(0)
+  const wheelCooldownRef = useRef(false)
+  const wheelResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   useEffect(() => {
     const settings = loadViewerSettings()
     settings.pdfZoomMode = zoomMode
@@ -125,6 +127,7 @@ export function PdfViewer({
   const goTo = useCallback(
     (page: number) => {
       const next = Math.min(Math.max(1, page), numPages ?? 1)
+      scrollRef.current?.scrollTo(0, 0)
       setPageNumber(next)
       onPageChange?.(next)
     },
@@ -195,6 +198,89 @@ export function PdfViewer({
     },
     []
   )
+
+  const activateWheel = useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const onWheel = (e: WheelEvent) => {
+      if (wheelCooldownRef.current) return
+
+      if (e.deltaY > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+        wheelAccumRef.current += e.deltaY
+        if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
+        wheelResetTimerRef.current = setTimeout(() => { wheelAccumRef.current = 0 }, 700)
+        if (wheelAccumRef.current > 140) {
+          wheelAccumRef.current = 0
+          if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
+          wheelCooldownRef.current = true
+          setTimeout(() => { wheelCooldownRef.current = false }, 800)
+          const next = pageNumberRef.current + 1
+          if (numPagesRef.current === null || next <= numPagesRef.current) {
+            goTo(next)
+          }
+        }
+      } else if (e.deltaY < 0 && el.scrollTop <= 4) {
+        wheelAccumRef.current += e.deltaY
+        if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
+        wheelResetTimerRef.current = setTimeout(() => { wheelAccumRef.current = 0 }, 700)
+        if (wheelAccumRef.current < -140) {
+          wheelAccumRef.current = 0
+          if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
+          wheelCooldownRef.current = true
+          setTimeout(() => { wheelCooldownRef.current = false }, 800)
+          goTo(pageNumberRef.current - 1)
+        }
+      } else {
+        wheelAccumRef.current = 0
+        if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
+      }
+    }
+
+    el.addEventListener("wheel", onWheel, { passive: true })
+    return () => {
+      el.removeEventListener("wheel", onWheel)
+      if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
+    }
+  }, [goTo])
+
+  useEffect(() => {
+    return activateWheel()
+  }, [activateWheel, numPages])
+
+  const touchStartYRef = useRef(0)
+
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+
+    const onTouchStart = (e: TouchEvent) => {
+      touchStartYRef.current = e.touches[0]?.clientY ?? 0
+    }
+
+    const onTouchEnd = (e: TouchEvent) => {
+      const endY = e.changedTouches[0]?.clientY ?? 0
+      const delta = touchStartYRef.current - endY
+
+      if (Math.abs(delta) < 50) return
+
+      if (delta > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
+        const next = pageNumberRef.current + 1
+        if (numPagesRef.current === null || next <= numPagesRef.current) {
+          goTo(next)
+        }
+      } else if (delta < 0 && el.scrollTop <= 4) {
+        goTo(pageNumberRef.current - 1)
+      }
+    }
+
+    el.addEventListener("touchstart", onTouchStart, { passive: true })
+    el.addEventListener("touchend", onTouchEnd, { passive: true })
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart)
+      el.removeEventListener("touchend", onTouchEnd)
+    }
+  }, [goTo, numPages])
 
   const handleMouseUp = useCallback(() => {
     setTimeout(() => {
@@ -277,24 +363,6 @@ export function PdfViewer({
   )
 
   const pageHighlights = highlights.filter((h) => h.pdfPage === pageNumber)
-
-  const swipeHandlers = useSwipeable({
-    onSwipedLeft: () => goTo(pageNumber + 1),
-    onSwipedRight: () => goTo(pageNumber - 1),
-    delta: 30,
-    trackMouse: isMobile,
-  })
-  const { ref: swipeRef, ...swipeHandlersRest } = swipeHandlers
-
-  const mergedRef = useCallback(
-    (node: HTMLDivElement | null) => {
-      ;(scrollRef as React.MutableRefObject<HTMLDivElement | null>).current = node
-      if (typeof swipeRef === "function") {
-        swipeRef(node)
-      }
-    },
-    [swipeRef]
-  )
 
   useEffect(() => {
     const pageEl = pageRef.current
@@ -396,9 +464,8 @@ export function PdfViewer({
       </div>
 
       <div
-        ref={isMobile ? mergedRef : scrollRef}
-        className="flex min-h-0 flex-1 flex-col items-center overflow-auto bg-muted/40 p-4"
-        {...(isMobile ? swipeHandlersRest : {})}
+        ref={scrollRef}
+        className="flex min-h-0 flex-1 items-start justify-center overflow-auto bg-muted/40 p-4"
       >
         <Document
           file={url}
