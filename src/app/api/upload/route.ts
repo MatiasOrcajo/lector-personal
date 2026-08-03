@@ -7,13 +7,17 @@ import { auth } from "@/auth"
 const ALLOWED_FORMATS = ["pdf", "epub"]
 
 export async function POST(request: NextRequest) {
-  const session = await auth()
-  const userId = session?.user?.id
-  if (!userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  }
-
   const body = await request.json()
+
+  let userId: string | undefined
+
+  if (body.type !== "blob.upload-completed") {
+    const session = await auth()
+    userId = session?.user?.id
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+    }
+  }
 
   const result = await handleUpload({
     body,
