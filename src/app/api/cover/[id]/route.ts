@@ -1,6 +1,7 @@
 import { auth } from "@/auth"
 import { prisma } from "@/lib/prisma"
 import { isBlobUrl } from "@/lib/blob-url"
+import { getFromCache, saveToCache } from "@/lib/blob-cache"
 import { NextRequest, NextResponse } from "next/server"
 
 export async function GET(
@@ -23,9 +24,20 @@ export async function GET(
     return NextResponse.json({ error: "Not found" }, { status: 404 })
   }
 
-  const target = isBlobUrl(book.coverUrl)
-  if (!target) {
+  const targetUrl = isBlobUrl(book.coverUrl)
+  if (!targetUrl) {
     return NextResponse.json({ error: "Invalid cover url" }, { status: 500 })
+  }
+
+  const targetStr = targetUrl.href
+
+  // try cache first
+  const cached = await getFromCache(targetStr)
+  if (cached) {
+    const headers = new Headers()
+    headers.set("content-type", cached.contentType)
+    headers.set("cache-control", "public, max-age=31536000, immutable")
+    return new NextResponse(new Uint8Array(cached.buffer), { status: 200, headers })
   }
 
   const token = process.env.BLOB_READ_WRITE_TOKEN
@@ -38,7 +50,7 @@ export async function GET(
 
   let blobResponse: Response
   try {
-    blobResponse = await fetch(target, {
+    blobResponse = await fetch(targetUrl, {
       headers: { Authorization: `Bearer ${token}` },
       cache: "no-store",
     })
@@ -50,15 +62,15 @@ export async function GET(
     return new NextResponse(null, { status: blobResponse.status })
   }
 
+  const contentType = blobResponse.headers.get("content-type") ?? "image/jpeg"
+  const buffer = Buffer.from(await blobResponse.arrayBuffer())
+
+  // cache for next time
+  saveToCache(targetStr, buffer, contentType).catch(() => {})
+
   const responseHeaders = new Headers()
-  const contentType = blobResponse.headers.get("content-type")
-  if (contentType) {
-    responseHeaders.set("content-type", contentType)
-  }
+  responseHeaders.set("content-type", contentType)
   responseHeaders.set("cache-control", "public, max-age=31536000, immutable")
 
-  return new NextResponse(blobResponse.body, {
-    status: blobResponse.status,
-    headers: responseHeaders,
-  })
+  return new NextResponse(new Uint8Array(buffer), { status: 200, headers: responseHeaders })
 }

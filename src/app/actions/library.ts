@@ -4,6 +4,7 @@ import { del } from "@vercel/blob"
 import { revalidatePath } from "next/cache"
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
+import { deleteFromCache, deleteManyFromCache } from "@/lib/blob-cache"
 
 export async function deleteBook(bookId: string) {
   const session = await auth()
@@ -12,7 +13,7 @@ export async function deleteBook(bookId: string) {
 
   const book = await prisma.book.findFirst({
     where: { id: bookId, userId },
-    select: { id: true, blobUrl: true },
+    select: { id: true, blobUrl: true, coverUrl: true },
   })
   if (!book) return { error: "Book not found" }
 
@@ -20,6 +21,12 @@ export async function deleteBook(bookId: string) {
     await del(book.blobUrl)
   } catch {
     // blob deletion failed but we still want to delete the DB record
+  }
+
+  // clean local cache
+  deleteFromCache(book.blobUrl).catch(() => {})
+  if (book.coverUrl) {
+    deleteFromCache(book.coverUrl).catch(() => {})
   }
 
   await prisma.book.delete({ where: { id: bookId } })
@@ -103,7 +110,7 @@ export async function deleteFolder(folderId: string) {
 
   const books = await prisma.book.findMany({
     where: { folderId, userId },
-    select: { blobUrl: true },
+    select: { blobUrl: true, coverUrl: true },
   })
 
   const blobUrls = books.map((b) => b.blobUrl)
@@ -113,6 +120,12 @@ export async function deleteFolder(folderId: string) {
     } catch {
       // blob deletion failed but we still delete the DB records
     }
+  }
+
+  // clean local cache for all books in folder
+  const cacheUrls = books.flatMap((b) => [b.blobUrl, b.coverUrl].filter(Boolean) as string[])
+  if (cacheUrls.length > 0) {
+    deleteManyFromCache(cacheUrls).catch(() => {})
   }
 
   await prisma.book.deleteMany({ where: { folderId, userId } })
