@@ -2,8 +2,8 @@
 
 import { useState, useRef } from "react"
 import { Upload } from "lucide-react"
+import { upload } from "@vercel/blob/client"
 import { Button } from "@/components/ui/button"
-import { uploadBook } from "@/app/actions/upload"
 
 export function UploadButton() {
   const [loading, setLoading] = useState(false)
@@ -19,18 +19,15 @@ export function UploadButton() {
     setError(null)
     setSuccess(false)
 
-    const formData = new FormData()
-    formData.append("file", file)
-
     try {
-      const result = await uploadBook(formData)
+      await upload(file.name, file, {
+        access: "private",
+        handleUploadUrl: "/api/upload",
+        multipart: true,
+      })
 
-      if (result.error) {
-        setError(result.error)
-      } else {
-        setSuccess(true)
-        setTimeout(() => setSuccess(false), 3000)
-      }
+      setSuccess(true)
+      setTimeout(() => setSuccess(false), 3000)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed")
     } finally {
