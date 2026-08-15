@@ -10,7 +10,7 @@ import {
     useState,
     type KeyboardEvent,
 } from "react"
-import type {Rendition} from "epubjs"
+import type {NavItem, Rendition} from "epubjs"
 import {ReactReader, ReactReaderStyle} from "react-reader"
 import {useSwipeable} from "react-swipeable"
 import {Button} from "@/components/ui/button"
@@ -164,6 +164,59 @@ const TOC_THEMES: Record<
     },
 }
 
+/** @toc-active-styles Estilos que se aplican al item de la tabla de contenidos
+ *  correspondiente a la sección que se está leyendo. Se inyectan por DOM
+ *  (react-reader no expone un prop para marcar el item activo).
+ *  @keyword TOC, item-activo, seccion-actual, resaltar, estilos */
+const ACTIVE_TOC_STYLES: Record<
+    ReaderMode,
+    { background: string; color: string; accent: string }
+> = {
+    light: {background: "rgba(26, 79, 216, 0.08)", color: "#1a1a1a", accent: "#1a4fd8"},
+    dark: {background: "rgba(138, 180, 248, 0.14)", color: "#ffffff", accent: "#8ab4f8"},
+    sepia: {background: "rgba(91, 70, 54, 0.10)", color: "#3f2f22", accent: "#5b4636"},
+}
+
+/** @flatten-toc Aplana el árbol de navegación del libro en orden depth-first.
+ *  react-reader renderiza los botones del TOC en el mismo orden, por lo que
+ *  el índice plano permite ubicar el botón del item activo en el DOM.
+ *  @keyword TOC, aplanar, depth-first, orden, indice-plano */
+function flattenToc(items: NavItem[]): NavItem[] {
+    const flat: NavItem[] = []
+    const walk = (list: NavItem[]) => {
+        for (const item of list) {
+            flat.push(item)
+            if (item.subitems && item.subitems.length > 0) {
+                walk(item.subitems)
+            }
+        }
+    }
+    walk(items)
+    return flat
+}
+
+/** @seccion-activa Busca el índice (en el TOC aplanado) de la sección cuyo
+ *  href coincide con el de la sección actual del libro. Compara sin fragmentos
+ *  (#) y decodificando URIs para tolerar diferencias de formato entre el TOC
+ *  y el spine. Devuelve -1 si no hay coincidencia.
+ *  @keyword TOC, indice-activo, href, spine, coincidencia, fragmento */
+function findActiveTocIndex(toc: NavItem[], href: string | null): number {
+    if (!href) return -1
+    const normalize = (value: string) => {
+        const withoutFragment = value.split("#")[0].toLowerCase()
+        try {
+            return decodeURIComponent(withoutFragment)
+        } catch {
+            return withoutFragment
+        }
+    }
+    const target = normalize(href)
+    return flattenToc(toc).findIndex((item) => {
+        if (!item.href) return false
+        return normalize(item.href) === target
+    })
+}
+
 /** @epub-highlight Tipo interno para resaltados de EPUB.
  *  A diferencia del PDF, los resaltados EPUB usan CFI en lugar de
  *  coordenadas de rectángulo.
@@ -252,6 +305,17 @@ export function ReaderWrapper({
     const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const lastLocationRef = useRef<string | null>(initialLocation)
     const [renditionReady, setRenditionReady] = useState(false)
+
+    // ──────────────────────────────────────────────
+    //  @estado-toc Tabla de contenidos y sección actual
+    //  @keyword TOC, indice, seccion-actual, href, item-activo
+    // ──────────────────────────────────────────────
+    const [toc, setToc] = useState<NavItem[]>([])
+    const [currentSectionHref, setCurrentSectionHref] = useState<string | null>(null)
+    const activeTocIndex = useMemo(
+        () => findActiveTocIndex(toc, currentSectionHref),
+        [toc, currentSectionHref]
+    )
 
     // ──────────────────────────────────────────────
     //  @estado-paginas Páginas actual y total por formato
@@ -502,6 +566,15 @@ export function ReaderWrapper({
         (loc: string) => {
             setLocation(loc)
             persistLocation(loc)
+            const rendition = renditionRef.current
+            try {
+                const section = rendition?.book?.spine?.get(loc)
+                if (section?.href) {
+                    setCurrentSectionHref(section.href)
+                }
+            } catch {
+                // sección no disponible todavía
+            }
             if (navigatingToHighlightRef.current) {
                 navigatingToHighlightRef.current = false
                 return
@@ -509,7 +582,6 @@ export function ReaderWrapper({
             if (returnTarget) {
                 setReturnTarget(null)
             }
-            const rendition = renditionRef.current
             if (
                 rendition &&
                 rendition.book?.locations &&
@@ -594,6 +666,16 @@ export function ReaderWrapper({
                         setEpubCurrentPage(page)
                         epubCurrentPageRef.current = page
                     }
+                }
+                try {
+                    const current = rendition.currentLocation() as
+                        | {start?: {href?: string}}
+                        | undefined
+                    if (current?.start?.href) {
+                        setCurrentSectionHref(current.start.href)
+                    }
+                } catch {
+                    // sección no disponible todavía
                 }
             })
             .catch(() => {
@@ -743,6 +825,84 @@ export function ReaderWrapper({
     //
     //     return () => clearTimeout(timer)
     // }, [settings.epubFlow, refreshAllAnnotations])
+
+    // ──────────────────────────────────────────────
+    //  @marcar-seccion-activa Marca en el TOC del ReactReader el item de la
+    //  sección que se está leyendo. react-reader no expone un prop para el
+    //  item activo, así que se ubican los botones del TOC en el DOM (orden
+    //  depth-first = orden de render) y se aplican estilos inline que
+    //  sobreviven a re-renders. Al abrir el menú hamburguesa, hace scroll
+    //  hasta el item activo para que quede visible.
+    //  @keyword TOC, item-activo, seccion-actual, DOM, hamburguesa, scroll,
+    //  marca-activa
+    // ──────────────────────────────────────────────
+    useEffect(() => {
+        if (!mounted || !isEpub) return
+        const viewer = document.querySelector(".epub-viewer")
+        if (!viewer) return
+        const container = viewer.firstElementChild
+        if (!container) return
+        const buttons = Array.from(container.querySelectorAll("button"))
+        // Los primeros 3 botones del contenedor son: hamburguesa, prev y next.
+        if (buttons.length < 4) return
+        const tocButtons = buttons.slice(3)
+        const flatToc = flattenToc(toc)
+        const activeStyles = ACTIVE_TOC_STYLES[mode]
+
+        tocButtons.forEach((button) => {
+            button.style.background = ""
+            button.style.color = ""
+            button.style.fontWeight = ""
+            button.style.borderLeft = ""
+            button.style.paddingLeft = ""
+        })
+
+        let activeButton: HTMLButtonElement | null = null
+        if (activeTocIndex >= 0) {
+            const expectedLabel = flatToc[activeTocIndex]?.label
+            const candidate = tocButtons[activeTocIndex]
+            if (
+                candidate &&
+                expectedLabel &&
+                candidate.textContent?.trim() === expectedLabel
+            ) {
+                activeButton = candidate
+            } else if (expectedLabel) {
+                // Fallback: buscar por etiqueta si el orden del DOM cambió.
+                activeButton =
+                    tocButtons.find((b) => b.textContent?.trim() === expectedLabel) ??
+                    null
+            }
+        }
+
+        if (activeButton) {
+            activeButton.style.background = activeStyles.background
+            activeButton.style.color = activeStyles.color
+            activeButton.style.fontWeight = "600"
+            activeButton.style.borderLeft = `3px solid ${activeStyles.accent}`
+            activeButton.style.paddingLeft = "calc(1em - 3px)"
+        }
+
+        const hamburger = buttons[0]
+        const readerArea = container.children[0] as HTMLElement | undefined
+        const tocArea = container.children[1] as HTMLElement | undefined
+
+        const onHamburgerClick = () => {
+            if (!activeButton || !tocArea || !readerArea) return
+            requestAnimationFrame(() => {
+                // readerArea queda con transform solo cuando el TOC está expandido.
+                if (readerArea.style.transform) {
+                    tocArea.scrollTo({
+                        top: Math.max(0, activeButton.offsetTop - tocArea.clientHeight / 2),
+                        behavior: "smooth",
+                    })
+                }
+            })
+        }
+
+        hamburger?.addEventListener("click", onHamburgerClick)
+        return () => hamburger?.removeEventListener("click", onHamburgerClick)
+    }, [mounted, isEpub, toc, activeTocIndex, mode])
 
     /** @reader-styles Estilos del ReactReader fusionados con los colores del tema
      *  activo. Se recalcula con useMemo cada vez que cambia el modo de lectura.
@@ -1277,6 +1437,7 @@ export function ReaderWrapper({
                                 title={title}
                                 location={location}
                                 locationChanged={locationChanged}
+                                tocChanged={(tocItems) => setToc(tocItems)}
                                 getRendition={getRendition}
                                 readerStyles={readerStyles}
                                 epubOptions={{
