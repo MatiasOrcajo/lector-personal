@@ -18,6 +18,7 @@ export function ThemeToggle() {
 
     // Evita el error de hidratación renderizando un estado neutral primero
     useEffect(() => {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
         setMounted(true)
     }, [])
 

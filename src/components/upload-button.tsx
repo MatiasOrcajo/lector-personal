@@ -3,9 +3,12 @@
 import { useState, useRef } from "react"
 import { Upload } from "lucide-react"
 import { upload } from "@vercel/blob/client"
+import { useRouter } from "next/navigation"
+import { saveUploadedBook } from "@/app/actions/upload"
 import { Button } from "@/components/ui/button"
 
 export function UploadButton() {
+  const router = useRouter()
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
@@ -20,14 +23,27 @@ export function UploadButton() {
     setSuccess(false)
 
     try {
-      await upload(file.name, file, {
+      const blob = await upload(file.name, file, {
         access: "private",
         handleUploadUrl: "/api/upload",
         multipart: true,
       })
 
-      setSuccess(true)
-      setTimeout(() => setSuccess(false), 3000)
+      const extension = file.name.split(".").pop()?.toLowerCase() ?? ""
+
+      const result = await saveUploadedBook({
+        blobUrl: blob.url,
+        title: file.name,
+        format: extension,
+      })
+
+      if (result.error) {
+        setError(result.error)
+      } else {
+        setSuccess(true)
+        router.refresh()
+        setTimeout(() => setSuccess(false), 3000)
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed")
     } finally {

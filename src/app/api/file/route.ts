@@ -49,22 +49,50 @@ function fullHeaders(contentType: string, length: number): Headers {
   return headers
 }
 
-async function fetchAndCache(targetUrl: string, token: string) {
-  const blobResponse = await fetch(targetUrl, {
-    headers: { Authorization: `Bearer ${token}` },
-    cache: "no-store",
-  })
+const inFlightFetches = new Map<
+  string,
+  Promise<{ buffer: Buffer; contentType: string }>
+>()
 
-  if (!blobResponse.ok) {
-    return { blobResponse, buffer: null, contentType: "" }
+class BlobFetchError extends Error {
+  constructor(public readonly status: number) {
+    super(`Failed to fetch blob: ${status}`)
   }
+}
 
-  const contentType = blobResponse.headers.get("content-type") ?? "application/octet-stream"
-  const buffer = Buffer.from(await blobResponse.arrayBuffer())
+/** Deduplica descargas del archivo completo desde Blob Storage.
+ *  pdf.js emite varias peticiones Range en paralelo; en cache-miss cada una
+ *  disparaba un fetch completo del archivo. Con single-flight, todas las
+ *  peticiones concurrentes comparten una sola descarga. */
+async function fetchFullFile(targetUrl: string, token: string) {
+  const existing = inFlightFetches.get(targetUrl)
+  if (existing) return existing
 
-  saveToCache(targetUrl, buffer, contentType).catch(() => {})
+  const promise = (async () => {
+    const blobResponse = await fetch(targetUrl, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: "no-store",
+    })
 
-  return { blobResponse, buffer, contentType }
+    if (!blobResponse.ok) {
+      throw new BlobFetchError(blobResponse.status)
+    }
+
+    const contentType =
+      blobResponse.headers.get("content-type") ?? "application/octet-stream"
+    const buffer = Buffer.from(await blobResponse.arrayBuffer())
+
+    saveToCache(targetUrl, buffer, contentType).catch(() => {})
+
+    return { buffer, contentType }
+  })()
+
+  inFlightFetches.set(targetUrl, promise)
+  try {
+    return await promise
+  } finally {
+    inFlightFetches.delete(targetUrl)
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -124,25 +152,26 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Cache miss — fetch full file from Blob
-  let blobResponse: Response
+  // Cache miss — fetch full file from Blob (single-flight)
   let buffer: Buffer | null = null
   let contentType: string
 
   try {
-    const result = await fetchAndCache(targetUrl, token)
-    blobResponse = result.blobResponse
+    const result = await fetchFullFile(targetUrl, token)
     buffer = result.buffer
     contentType = result.contentType
-  } catch {
+  } catch (error) {
+    if (error instanceof BlobFetchError) {
+      return new NextResponse(null, { status: error.status })
+    }
     return NextResponse.json(
       { error: "Failed to fetch file" },
       { status: 502 }
     )
   }
 
-  if (!blobResponse.ok || !buffer) {
-    return new NextResponse(null, { status: blobResponse.status })
+  if (!buffer) {
+    return new NextResponse(null, { status: 502 })
   }
 
   if (rangeHeader) {

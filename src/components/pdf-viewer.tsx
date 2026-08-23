@@ -29,6 +29,10 @@ const ZOOM_OPTIONS: { label: string; value: PdfZoomMode | number }[] = [
   { label: "200%", value: 2 },
 ]
 
+const ZOOM_STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2]
+
+const CONTINUOUS_GAP = 24
+
 type HighlightRect = { x: number; y: number; width: number; height: number }
 
 export type PdfHighlight = {
@@ -66,7 +70,6 @@ export function PdfViewer({
   bookId,
   highlights,
   onCreateHighlight,
-  onDeleteHighlight,
   onReady,
 }: PdfViewerProps) {
   const { mode } = useThemeMode()
@@ -92,15 +95,18 @@ export function PdfViewer({
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null)
   const pdfRef = useRef<PDFDocumentProxy | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
-  const pageRef = useRef<HTMLDivElement | null>(null)
   const [scrollSize, setScrollSize] = useState({ width: 0, height: 0 })
+
+  const [pageSizes, setPageSizes] = useState<{ width: number; height: number }[] | null>(null)
+  const [renderedRange, setRenderedRange] = useState<{ start: number; end: number } | null>(null)
+  const scrollRafRef = useRef<number | null>(null)
+  const pendingCenterRef = useRef(true)
 
   const [popover, setPopover] = useState<{ x: number; y: number } | null>(null)
   const [selectionText, setSelectionText] = useState<string>("")
 
-  const wheelAccumRef = useRef(0)
-  const wheelCooldownRef = useRef(false)
-  const wheelResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
     const settings = loadViewerSettings()
@@ -108,6 +114,16 @@ export function PdfViewer({
     settings.pdfZoom = zoom
     saveViewerSettings(settings)
   }, [zoomMode, zoom])
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setPageSizes(null)
+    setRenderedRange(null)
+    setLoadError(null)
+    setViewport(null)
+    setNumPages(null)
+    pdfRef.current = null
+  }, [url])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -124,37 +140,55 @@ export function PdfViewer({
     return () => observer.disconnect()
   }, [])
 
-  const goTo = useCallback(
-    (page: number) => {
-      const next = Math.min(Math.max(1, page), numPages ?? 1)
-      scrollRef.current?.scrollTo(0, 0)
-      setPageNumber(next)
-      onPageChange?.(next)
+  const onDocumentLoadSuccess = useCallback(
+    (pdf: PDFDocumentProxy) => {
+      setNumPages(pdf.numPages)
+      pdfRef.current = pdf
+      setPageNumber((prev) => {
+        const clamped = Math.min(Math.max(1, prev), pdf.numPages)
+        pageNumberRef.current = clamped
+        return clamped
+      })
+      onTotalPagesChange?.(pdf.numPages)
     },
-    [numPages, onPageChange]
+    [onTotalPagesChange]
   )
 
-  const apiRef = useRef<PdfViewerApi>({
-    goToPage: () => {},
-    getCurrentPage: () => pageNumberRef.current,
-    getNumPages: () => numPagesRef.current,
-  })
+  const onLoadError = useCallback((error: Error) => {
+    const name = error instanceof Error ? error.name : ""
+    const message = error instanceof Error ? error.message : String(error)
+    let label = "No se pudo abrir el PDF."
+    if (name === "PasswordException") {
+      label = "El PDF está protegido con contraseña."
+    } else if (name === "InvalidPDFException") {
+      label = "El archivo no es un PDF válido."
+    } else if (/fetch|network|Failed to fetch/i.test(message)) {
+      label = "Error de red al descargar el PDF."
+    }
+    setLoadError(message ? `${label} (${message})` : label)
+  }, [])
 
   useEffect(() => {
-    apiRef.current.goToPage = goTo
-    apiRef.current.getCurrentPage = () => pageNumberRef.current
-    apiRef.current.getNumPages = () => numPagesRef.current
-  })
-
-  useEffect(() => {
-    onReady(apiRef.current)
-  }, [onReady])
-
-  const onDocumentLoadSuccess = useCallback((pdf: PDFDocumentProxy) => {
-    setNumPages(pdf.numPages)
-    pdfRef.current = pdf
-    onTotalPagesChange?.(pdf.numPages)
-  }, [onTotalPagesChange])
+    const pdf = pdfRef.current
+    if (!pdf || numPages === null || pageSizes) return
+    let cancelled = false
+    const load = async () => {
+      const pages = await Promise.all(
+        Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1))
+      )
+      if (cancelled) return
+      setPageSizes(
+        pages.map((p) => {
+          const vp = p.getViewport({ scale: 1 })
+          return { width: vp.width, height: vp.height }
+        })
+      )
+    }
+    void load().catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [url, numPages, pageSizes])
 
   useEffect(() => {
     const pdf = pdfRef.current
@@ -177,13 +211,139 @@ export function PdfViewer({
     if (!viewport) return null
     const pad = 32
     const cw = Math.max(scrollSize.width - pad, 100)
-    const ch = Math.max(scrollSize.height - pad, 100)
-    if (zoomMode === "fit-width") return cw / viewport.width
-    if (zoomMode === "fit-page") {
-      return Math.min(cw / viewport.width, ch / viewport.height)
+    if (zoomMode === "fit-width" || zoomMode === "fit-page") {
+      const refWidth = pageSizes?.[0] ? pageSizes[0].width : viewport.width
+      return cw / refWidth
     }
     return zoom
-  }, [viewport, zoomMode, zoom, scrollSize])
+  }, [viewport, zoomMode, zoom, scrollSize, pageSizes])
+
+  const scaledSizes = useMemo(() => {
+    if (!pageSizes || !scale) return null
+    return pageSizes.map((s) => ({
+      width: s.width * scale,
+      height: s.height * scale,
+    }))
+  }, [pageSizes, scale])
+
+  const offsets = useMemo(() => {
+    if (!scaledSizes) return null
+    const arr: number[] = []
+    let acc = 0
+    for (const s of scaledSizes) {
+      arr.push(acc)
+      acc += s.height + CONTINUOUS_GAP
+    }
+    return arr
+  }, [scaledSizes])
+
+  const totalHeight = useMemo(() => {
+    if (!offsets || !scaledSizes || scaledSizes.length === 0) return 0
+    return (
+      offsets[offsets.length - 1] +
+      scaledSizes[scaledSizes.length - 1].height
+    )
+  }, [offsets, scaledSizes])
+
+  const goTo = useCallback(
+    (page: number) => {
+      const next = Math.min(Math.max(1, page), numPages ?? 1)
+      const el = scrollRef.current
+      if (offsets) {
+        const idx = next - 1
+        if (idx >= 0 && idx < offsets.length) {
+          el?.scrollTo(0, offsets[idx])
+        }
+      } else {
+        el?.scrollTo(0, 0)
+      }
+      if (next === pageNumberRef.current) return
+      pageNumberRef.current = next
+      setPageNumber(next)
+      onPageChange?.(next)
+    },
+    [numPages, onPageChange, offsets]
+  )
+
+  const apiRef = useRef<PdfViewerApi>({
+    goToPage: () => {},
+    getCurrentPage: () => pageNumberRef.current,
+    getNumPages: () => numPagesRef.current,
+  })
+
+  useEffect(() => {
+    apiRef.current.goToPage = goTo
+    apiRef.current.getCurrentPage = () => pageNumberRef.current
+    apiRef.current.getNumPages = () => numPagesRef.current
+  })
+
+  useEffect(() => {
+    onReady(apiRef.current)
+  }, [onReady])
+
+  const updateContinuousView = useCallback(() => {
+    const el = scrollRef.current
+    if (!el || !offsets || !scaledSizes) return
+    const n = offsets.length
+    if (n === 0) return
+    const viewTop = el.scrollTop
+    const viewBottom = viewTop + el.clientHeight
+    let start = 0
+    let end = 0
+    let found = false
+    for (let i = 0; i < n; i++) {
+      const bottom = offsets[i] + scaledSizes[i].height
+      if (!found && bottom > viewTop) {
+        start = i
+        found = true
+      }
+      if (bottom > viewTop) end = i
+      if (offsets[i] > viewBottom) break
+    }
+    const buffer = 1
+    const s = Math.max(0, start - buffer)
+    const e = Math.min(n - 1, end + buffer)
+    setRenderedRange((prev) =>
+      prev && prev.start === s && prev.end === e ? prev : { start: s, end: e }
+    )
+
+    let current = 1
+    for (let i = 0; i < n; i++) {
+      if (offsets[i] <= viewTop + 2) current = i + 1
+      else break
+    }
+    if (current !== pageNumberRef.current) {
+      pageNumberRef.current = current
+      setPageNumber(current)
+      onPageChange?.(current)
+    }
+  }, [offsets, scaledSizes, onPageChange])
+
+  const handleScroll = useCallback(() => {
+    if (scrollRafRef.current !== null) return
+    scrollRafRef.current = window.requestAnimationFrame(() => {
+      scrollRafRef.current = null
+      updateContinuousView()
+    })
+  }, [updateContinuousView])
+
+  useEffect(() => {
+    pendingCenterRef.current = true
+  }, [zoomMode, zoom])
+
+  useEffect(() => {
+    if (!offsets || offsets.length === 0) return
+    if (!pendingCenterRef.current) return
+    pendingCenterRef.current = false
+    const el = scrollRef.current
+    if (!el) return
+    const idx = Math.min(Math.max(1, pageNumberRef.current), offsets.length) - 1
+    el.scrollTo(0, offsets[idx])
+  }, [offsets])
+
+  useEffect(() => {
+    updateContinuousView()
+  }, [offsets, updateContinuousView])
 
   const handleZoomChange = useCallback(
     (value: string) => {
@@ -199,88 +359,40 @@ export function PdfViewer({
     []
   )
 
-  const activateWheel = useCallback(() => {
-    const el = scrollRef.current
-    if (!el) return
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const target = e.target
+      if (target instanceof Element && target.closest("input, select, textarea, [contenteditable]")) return
 
-    const onWheel = (e: WheelEvent) => {
-      if (wheelCooldownRef.current) return
+      if (e.key === "Home") {
+        e.preventDefault()
+        goTo(1)
+      } else if (e.key === "End") {
+        e.preventDefault()
+        goTo(numPagesRef.current ?? 1)
+      }
 
-      if (e.deltaY > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
-        wheelAccumRef.current += e.deltaY
-        if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
-        wheelResetTimerRef.current = setTimeout(() => { wheelAccumRef.current = 0 }, 700)
-        if (wheelAccumRef.current > 140) {
-          wheelAccumRef.current = 0
-          if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
-          wheelCooldownRef.current = true
-          setTimeout(() => { wheelCooldownRef.current = false }, 800)
-          const next = pageNumberRef.current + 1
-          if (numPagesRef.current === null || next <= numPagesRef.current) {
-            goTo(next)
-          }
-        }
-      } else if (e.deltaY < 0 && el.scrollTop <= 4) {
-        wheelAccumRef.current += e.deltaY
-        if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
-        wheelResetTimerRef.current = setTimeout(() => { wheelAccumRef.current = 0 }, 700)
-        if (wheelAccumRef.current < -140) {
-          wheelAccumRef.current = 0
-          if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
-          wheelCooldownRef.current = true
-          setTimeout(() => { wheelCooldownRef.current = false }, 800)
-          goTo(pageNumberRef.current - 1)
-        }
-      } else {
-        wheelAccumRef.current = 0
-        if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
+      if (e.key === "+" || e.key === "=") {
+        const cur = zoomMode === "custom" ? zoom : 1
+        const next = ZOOM_STEPS.find((s) => s > cur + 0.001) ?? 2
+        setZoom(next)
+        setZoomMode("custom")
+      } else if (e.key === "-") {
+        const cur = zoomMode === "custom" ? zoom : 1
+        const next = [...ZOOM_STEPS].reverse().find((s) => s < cur - 0.001) ?? 0.5
+        setZoom(next)
+        setZoomMode("custom")
       }
     }
+    window.addEventListener("keydown", onKeyDown)
+    return () => window.removeEventListener("keydown", onKeyDown)
+  }, [goTo, zoomMode, zoom])
 
-    el.addEventListener("wheel", onWheel, { passive: true })
-    return () => {
-      el.removeEventListener("wheel", onWheel)
-      if (wheelResetTimerRef.current) clearTimeout(wheelResetTimerRef.current)
-    }
-  }, [goTo])
-
-  useEffect(() => {
-    return activateWheel()
-  }, [activateWheel, numPages])
-
-  const touchStartYRef = useRef(0)
-
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-
-    const onTouchStart = (e: TouchEvent) => {
-      touchStartYRef.current = e.touches[0]?.clientY ?? 0
-    }
-
-    const onTouchEnd = (e: TouchEvent) => {
-      const endY = e.changedTouches[0]?.clientY ?? 0
-      const delta = touchStartYRef.current - endY
-
-      if (Math.abs(delta) < 50) return
-
-      if (delta > 0 && el.scrollTop + el.clientHeight >= el.scrollHeight - 4) {
-        const next = pageNumberRef.current + 1
-        if (numPagesRef.current === null || next <= numPagesRef.current) {
-          goTo(next)
-        }
-      } else if (delta < 0 && el.scrollTop <= 4) {
-        goTo(pageNumberRef.current - 1)
-      }
-    }
-
-    el.addEventListener("touchstart", onTouchStart, { passive: true })
-    el.addEventListener("touchend", onTouchEnd, { passive: true })
-    return () => {
-      el.removeEventListener("touchstart", onTouchStart)
-      el.removeEventListener("touchend", onTouchEnd)
-    }
-  }, [goTo, numPages])
+  const findPageElement = useCallback((node: Node | null): HTMLElement | null => {
+    if (!node) return null
+    const el = node instanceof Element ? node : node.parentElement
+    return el?.closest<HTMLElement>("[data-page-index]") ?? null
+  }, [])
 
   const handleMouseUp = useCallback(() => {
     setTimeout(() => {
@@ -289,8 +401,8 @@ export function PdfViewer({
         return
       }
 
-      const pageEl = pageRef.current
-      if (!pageEl || !pageEl.contains(selection.anchorNode)) return
+      const pageEl = findPageElement(selection.anchorNode)
+      if (!pageEl) return
 
       const text = selection.toString().trim()
       if (!text) return
@@ -302,11 +414,11 @@ export function PdfViewer({
       const firstRect = rects[0]
       setPopover({
         x: firstRect.left + firstRect.width / 2,
-        y: firstRect.top + window.scrollY,
+        y: firstRect.top,
       })
       setSelectionText(text)
     }, 0)
-  }, [])
+  }, [findPageElement])
 
   const handleColorSelect = useCallback(
     (color: HighlightColor) => {
@@ -316,21 +428,33 @@ export function PdfViewer({
         return
       }
 
-      const pageEl = pageRef.current
+      const pageEl = findPageElement(selection.anchorNode)
       if (!pageEl) {
+        setPopover(null)
+        return
+      }
+
+      const page = Number(pageEl.dataset.pageIndex)
+      if (!page) {
         setPopover(null)
         return
       }
 
       const range = selection.getRangeAt(0)
       const rects = range.getClientRects()
+      if (rects.length === 0) {
+        setPopover(null)
+        return
+      }
+
       const pageRect = pageEl.getBoundingClientRect()
+      const s = scale ?? 1
 
       const pdfRects: HighlightRect[] = Array.from(rects).map((r) => ({
-        x: r.left - pageRect.left,
-        y: r.top - pageRect.top,
-        width: r.width,
-        height: r.height,
+        x: (r.left - pageRect.left) / s,
+        y: (r.top - pageRect.top) / s,
+        width: r.width / s,
+        height: r.height / s,
       }))
 
       import("@/app/actions/highlights").then(({ createHighlight: create }) => {
@@ -338,9 +462,9 @@ export function PdfViewer({
           bookId,
           text: selectionText,
           color,
-          pdfPage: pageNumber,
+          pdfPage: page,
           pdfRects,
-          pageLabel: pageNumber ? `Página ${pageNumber}` : undefined,
+          pageLabel: page ? `Página ${page}` : undefined,
         }).then((result) => {
           if (result.success && result.highlight) {
             onCreateHighlight({
@@ -348,7 +472,7 @@ export function PdfViewer({
               text: selectionText,
               color,
               pdfRects,
-              pdfPage: pageNumber,
+              pdfPage: page,
               pageLabel: result.highlight.pageLabel ?? null,
             })
           }
@@ -359,50 +483,57 @@ export function PdfViewer({
       setPopover(null)
       setSelectionText("")
     },
-    [bookId, pageNumber, selectionText, onCreateHighlight]
+    [bookId, selectionText, scale, onCreateHighlight, findPageElement]
   )
 
-  const pageHighlights = highlights.filter((h) => h.pdfPage === pageNumber)
-
   useEffect(() => {
-    const pageEl = pageRef.current
-    if (!pageEl || pageHighlights.length === 0) return
+    const container = scrollRef.current
+    if (!container || highlights.length === 0) return
 
     let observer: MutationObserver | null = null
     let attempts = 0
     const maxAttempts = 20
 
     const boldHighlights = () => {
-      const textSpans = pageEl.querySelectorAll<HTMLElement>(
-        ".react-pdf__Page__textContent span"
-      )
-      if (textSpans.length === 0) return
-
-      const highlightEls = pageEl.querySelectorAll<HTMLElement>(
+      const highlightEls = container.querySelectorAll<HTMLElement>(
         "[data-highlight-id]"
       )
+      if (highlightEls.length === 0) return
 
+      const byPage = new Map<HTMLElement, HTMLElement[]>()
       highlightEls.forEach((hlEl) => {
-        const hlBounds = hlEl.getBoundingClientRect()
-        textSpans.forEach((span) => {
-          const spanBounds = span.getBoundingClientRect()
-          const overlap = !(
-            spanBounds.right < hlBounds.left ||
-            spanBounds.left > hlBounds.right ||
-            spanBounds.bottom < hlBounds.top ||
-            spanBounds.top > hlBounds.bottom
-          )
-          if (overlap) {
-            span.style.fontWeight = "bold"
-          }
-        })
+        const wrapper = hlEl.closest<HTMLElement>("[data-page-index]")
+        if (!wrapper) return
+        const list = byPage.get(wrapper) ?? []
+        list.push(hlEl)
+        byPage.set(wrapper, list)
       })
 
-      observer?.disconnect()
+      byPage.forEach((els, wrapper) => {
+        const textSpans = wrapper.querySelectorAll<HTMLElement>(
+          ".react-pdf__Page__textContent span"
+        )
+        if (textSpans.length === 0) return
+        els.forEach((hlEl) => {
+          const hlBounds = hlEl.getBoundingClientRect()
+          textSpans.forEach((span) => {
+            const spanBounds = span.getBoundingClientRect()
+            const overlap = !(
+              spanBounds.right < hlBounds.left ||
+              spanBounds.left > hlBounds.right ||
+              spanBounds.bottom < hlBounds.top ||
+              spanBounds.top > hlBounds.bottom
+            )
+            if (overlap) {
+              span.style.fontWeight = "bold"
+            }
+          })
+        })
+      })
     }
 
     const tryBold = () => {
-      if (pageEl.querySelector(".react-pdf__Page__textContent")) {
+      if (container.querySelector(".react-pdf__Page__textContent")) {
         boldHighlights()
       } else if (attempts < maxAttempts) {
         attempts++
@@ -413,13 +544,31 @@ export function PdfViewer({
     observer = new MutationObserver(() => {
       tryBold()
     })
-    observer.observe(pageEl, { childList: true, subtree: true })
+    observer.observe(container, { childList: true, subtree: true })
     tryBold()
 
     return () => {
       observer?.disconnect()
     }
-  }, [pageNumber, pageHighlights, scale])
+  }, [highlights, scale])
+
+  const renderHighlightOverlays = (h: PdfHighlight, scaleValue: number) =>
+    h.pdfRects?.map((rect, i) => (
+      <div
+        key={`${h.id}-${i}`}
+        data-highlight-id={h.id}
+        data-highlight-color={h.color}
+        className="pointer-events-none absolute"
+        style={{
+          left: rect.x * scaleValue,
+          top: rect.y * scaleValue,
+          width: rect.width * scaleValue,
+          height: rect.height * scaleValue,
+          backgroundColor: getEffectiveHighlightColor(h.color, mode),
+          mixBlendMode: "multiply",
+        }}
+      />
+    ))
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
@@ -465,11 +614,15 @@ export function PdfViewer({
 
       <div
         ref={scrollRef}
-        className="flex min-h-0 flex-1 items-start justify-center overflow-auto bg-muted/40 p-4"
+        onScroll={handleScroll}
+        onMouseUp={handleMouseUp}
+        className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4"
       >
         <Document
+          key={retryKey}
           file={url}
           onLoadSuccess={onDocumentLoadSuccess}
+          onLoadError={onLoadError}
           loading={
             <div className="flex items-center gap-2 py-20 text-muted-foreground">
               <LoaderCircle className="size-5 animate-spin" />
@@ -477,59 +630,81 @@ export function PdfViewer({
             </div>
           }
           error={
-            <div className="py-20 text-center text-destructive">
-              Error al cargar el PDF
+            <div className="py-20 text-center">
+              <p className="text-destructive">
+                {loadError ?? "Error al cargar el PDF"}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => {
+                  setLoadError(null)
+                  setRetryKey((k) => k + 1)
+                }}
+              >
+                Reintentar
+              </Button>
             </div>
           }
         >
-          {scale ? (
-            <div
-              ref={pageRef}
-              className="pdf-page relative"
-              onMouseUp={handleMouseUp}
-            >
-              <Page
-                pageNumber={pageNumber}
-                scale={scale}
-                renderTextLayer={true}
-                renderAnnotationLayer={false}
-                loading={
-                  <div className="flex items-center gap-2 py-20 text-muted-foreground">
-                    <LoaderCircle className="size-5 animate-spin" />
-                    <span>Renderizando página…</span>
-                  </div>
-                }
-                error={
-                  <div className="py-20 text-center text-destructive">
-                    Error al renderizar la página
-                  </div>
-                }
-              />
-              {pageHighlights.map((h) =>
-                h.pdfRects?.map((rect, i) => (
-                  <div
-                    key={`${h.id}-${i}`}
-                    data-highlight-id={h.id}
-                    data-highlight-color={h.color}
-                    className="pointer-events-auto absolute cursor-pointer transition-opacity hover:opacity-80"
-                    style={{
-                      left: rect.x,
-                      top: rect.y,
-                      width: rect.width,
-                      height: rect.height,
-                      backgroundColor: getEffectiveHighlightColor(h.color, mode),
-                      mixBlendMode: "multiply",
-                    }}
-                    title={h.text}
-                    onClick={() => onDeleteHighlight(h.id)}
-                  />
-                ))
-              )}
-            </div>
-          ) : (
+          {!scale || !offsets || !scaledSizes ? (
             <div className="flex items-center gap-2 py-20 text-muted-foreground">
               <LoaderCircle className="size-5 animate-spin" />
               <span>Calculando vista…</span>
+            </div>
+          ) : (
+            <div
+              className="pdf-continuous relative w-full"
+              style={{ height: totalHeight }}
+            >
+              {scaledSizes.map((size, i) => {
+                const page = i + 1
+                const isRendered =
+                  renderedRange !== null &&
+                  page >= renderedRange.start + 1 &&
+                  page <= renderedRange.end + 1
+                const pageHighlights = highlights.filter(
+                  (h) => h.pdfPage === page
+                )
+                return (
+                  <div
+                    key={page}
+                    data-page-index={page}
+                    className="pdf-page absolute left-0 w-full"
+                    style={{ top: offsets[i], height: size.height }}
+                  >
+                    <div
+                      className="relative mx-auto"
+                      style={{ width: size.width, height: size.height }}
+                    >
+                      {isRendered ? (
+                        <>
+                          <Page
+                            pageNumber={page}
+                            scale={scale}
+                            renderTextLayer={true}
+                            renderAnnotationLayer={false}
+                            loading={
+                              <div className="flex items-center justify-center py-10 text-muted-foreground">
+                                <LoaderCircle className="size-5 animate-spin" />
+                              </div>
+                            }
+                            error={
+                              <div className="py-10 text-center text-destructive">
+                                Error al renderizar la página
+                              </div>
+                            }
+                          />
+                          {pageHighlights.map((h) =>
+                            renderHighlightOverlays(h, scale)
+                          )}
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           )}
         </Document>

@@ -12,7 +12,6 @@ import {
 } from "react"
 import type {NavItem, Rendition} from "epubjs"
 import {ReactReader, ReactReaderStyle} from "react-reader"
-import {useSwipeable} from "react-swipeable"
 import {Button} from "@/components/ui/button"
 import {ThemeToggle} from "@/components/theme-toggle"
 import {useThemeMode} from "@/components/theme-provider"
@@ -300,9 +299,20 @@ export function ReaderWrapper({
     //  @estado-lector Estado del lector EPUB y progreso
     //  @keyword ubicacion, CFI, rendition, guardado-diferido, progreso
     // ──────────────────────────────────────────────
+    /** @epub-data Buffer del EPUB descargado en el cliente.
+     *  Se pasa como ArrayBuffer a react-reader para que epub.js abra el libro
+     *  en modo BINARY (desde memoria) y NO resuelva los archivos internos
+     *  (META-INF/container.xml, capítulos, imágenes) como URLs contra la
+     *  página. Con la URL del proxy (/api/file?url=...) epub.js los resuelve
+     *  contra /read/... (404) y el lector queda en blanco.
+     *  @keyword EPUB, ArrayBuffer, BINARY, fetch, proxy, descarga-cliente */
+    const [epubData, setEpubData] = useState<ArrayBuffer | null>(null)
+    const [epubError, setEpubError] = useState<string | null>(null)
+
     const [location, setLocation] = useState<string | null>(initialLocation)
     const renditionRef = useRef<Rendition | null>(null)
     const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+    const pdfSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const lastLocationRef = useRef<string | null>(initialLocation)
     const [renditionReady, setRenditionReady] = useState(false)
 
@@ -386,6 +396,35 @@ export function ReaderWrapper({
     const proxiedUrl = `/api/file?url=${encodeURIComponent(url)}`
 
     // ──────────────────────────────────────────────
+    //  @descarga-epub Descarga el EPUB en el cliente como ArrayBuffer.
+    //  epub.js necesita el libro como datos binarios (modo BINARY) para no
+    //  resolver los archivos internos del zip como URLs relativas a la página.
+    //  Si la descarga falla, se muestra un error en lugar del lector en blanco.
+    //  @keyword EPUB, fetch, ArrayBuffer, descarga, error-descarga, cancelacion
+    // ──────────────────────────────────────────────
+    useEffect(() => {
+        if (!isEpub) return
+        let cancelled = false
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setEpubError(null)
+        setEpubData(null)
+        fetch(proxiedUrl)
+            .then((res) => {
+                if (!res.ok) throw new Error(`HTTP ${res.status}`)
+                return res.arrayBuffer()
+            })
+            .then((buffer) => {
+                if (!cancelled) setEpubData(buffer)
+            })
+            .catch(() => {
+                if (!cancelled) setEpubError("No se pudo descargar el EPUB.")
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [isEpub, proxiedUrl])
+
+    // ──────────────────────────────────────────────
     //  @persistencia-ubicacion Guarda la ubicación de lectura con debounce.
     //  Espera 1.2s de inactividad antes de llamar a saveProgress (Server Action).
     //  Al desmontar el componente, guarda la última ubicación pendiente.
@@ -409,6 +448,9 @@ export function ReaderWrapper({
         return () => {
             if (saveTimerRef.current) {
                 clearTimeout(saveTimerRef.current)
+            }
+            if (pdfSaveTimerRef.current) {
+                clearTimeout(pdfSaveTimerRef.current)
             }
             const last = lastLocationRef.current
             if (last) {
@@ -564,6 +606,26 @@ export function ReaderWrapper({
     // ──────────────────────────────────────────────
     const locationChanged = useCallback(
         (loc: string) => {
+            // epub.js emite eventos locationChanged transitorios con un
+            // Location sin `start` (react-reader los convierte en "undefined").
+            // Ignorar locs que no sean CFI válidos evita que EpubCFI
+            // (locationFromCfi/display) explote con "not a valid argument".
+            const isValidCfi =
+                typeof loc === "string" && loc.startsWith("epubcfi(")
+            if (!isValidCfi) {
+                // react-reader llama locationChanged(href) al hacer click en un
+                // item del TOC. No es un CFI: se navega directo con
+                // rendition.display(), que acepta hrefs con o sin fragmento.
+                // El "undefined" transitorio se sigue ignorando.
+                if (loc && loc !== "undefined") {
+                    const rendition = renditionRef.current
+                    if (rendition) {
+                        void rendition.display(loc).catch(() => {})
+                    }
+                }
+                return
+            }
+
             setLocation(loc)
             persistLocation(loc)
             const rendition = renditionRef.current
@@ -587,10 +649,16 @@ export function ReaderWrapper({
                 rendition.book?.locations &&
                 locationsReadyRef.current
             ) {
-                const page = Number(rendition.book.locations.locationFromCfi(loc))
-                if (page > 0) {
-                    setEpubCurrentPage(page)
-                    epubCurrentPageRef.current = page
+                try {
+                    const page = Number(
+                        rendition.book.locations.locationFromCfi(loc)
+                    )
+                    if (page > 0) {
+                        setEpubCurrentPage(page)
+                        epubCurrentPageRef.current = page
+                    }
+                } catch {
+                    // CFI fuera del rango de locations generadas
                 }
             }
         },
@@ -612,7 +680,7 @@ export function ReaderWrapper({
         setRenditionReady(true)
 
         // Detectamos dónde apoya el dedo el usuario
-        rendition.on("touchstart", (event: any) => {
+        rendition.on("touchstart", (event: TouchEvent) => {
             const touch = event.changedTouches?.[0] || event.touches?.[0]
             if (touch) {
                 touchStartXRef.current = touch.screenX
@@ -621,7 +689,7 @@ export function ReaderWrapper({
         })
 
         // Detectamos hacia dónde deslizó al levantar el dedo
-        rendition.on("touchend", (event: any) => {
+        rendition.on("touchend", (event: TouchEvent) => {
             const touch = event.changedTouches?.[0] || event.touches?.[0]
             if (!touch) return
 
@@ -661,10 +729,16 @@ export function ReaderWrapper({
                 locationsReadyRef.current = true
                 setEpubTotalPages(locs.length())
                 if (locationRef.current) {
-                    const page = Number(locs.locationFromCfi(locationRef.current))
-                    if (page > 0) {
-                        setEpubCurrentPage(page)
-                        epubCurrentPageRef.current = page
+                    try {
+                        const page = Number(
+                            locs.locationFromCfi(locationRef.current)
+                        )
+                        if (page > 0) {
+                            setEpubCurrentPage(page)
+                            epubCurrentPageRef.current = page
+                        }
+                    } catch {
+                        // lastLocation inválida o fuera del libro
                     }
                 }
                 try {
@@ -1169,7 +1243,12 @@ export function ReaderWrapper({
         (page: number) => {
             setPdfCurrentPage(page)
             lastLocationRef.current = `page:${page}`
-            void saveProgress(bookId, `page:${page}`)
+            if (pdfSaveTimerRef.current) {
+                clearTimeout(pdfSaveTimerRef.current)
+            }
+            pdfSaveTimerRef.current = setTimeout(() => {
+                void saveProgress(bookId, `page:${page}`)
+            }, 1200)
             if (navigatingToHighlightRef.current) {
                 navigatingToHighlightRef.current = false
                 return
@@ -1242,16 +1321,6 @@ export function ReaderWrapper({
     /** @todos-resaltados Lista unificada de resaltados para la barra lateral.
      *  @keyword resaltados, sidebar, lista-unificada, EPUB, PDF */
     const allHighlights = isEpub ? epubHighlights : pdfHighlights
-
-    const epubSwipeHandlers = useSwipeable({
-        onSwipedLeft: () => {
-            renditionRef.current?.next()
-        },
-        onSwipedRight: () => {
-            renditionRef.current?.prev()
-        },
-        delta: 30,
-    })
 
     // ──────────────────────────────────────────────
     //  @render Renderizado del componente.
@@ -1429,11 +1498,24 @@ export function ReaderWrapper({
                             <LoaderCircle className="size-5 animate-spin"/>
                             <span>Cargando lector…</span>
                         </div>
+                    ) : isEpub && !epubData && !epubError ? (
+                        <div className="flex h-full items-center justify-center gap-2 text-muted-foreground">
+                            <LoaderCircle className="size-5 animate-spin"/>
+                            <span>Descargando EPUB…</span>
+                        </div>
+                    ) : isEpub && epubError ? (
+                        <div className="flex h-full items-center justify-center px-4 text-center text-destructive">
+                            {epubError}
+                        </div>
                     ) : isEpub ? (
                         <div className="epub-viewer h-full overflow-hidden relative">
                             <ReactReader
                                 key={settings.epubFlow}
-                                url={proxiedUrl}
+                                // epubData (ArrayBuffer) se abre en modo BINARY de
+                                // epub.js: lee el zip desde memoria sin resolver
+                                // rutas internas por URL. El cast es necesario
+                                // porque el prop `url` está tipado como string.
+                                url={epubData as unknown as string}
                                 title={title}
                                 location={location}
                                 locationChanged={locationChanged}

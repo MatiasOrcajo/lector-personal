@@ -1,41 +1,33 @@
 "use server"
 
-import { put } from "@vercel/blob"
 import { revalidatePath } from "next/cache"
 import { prisma } from "@/lib/prisma"
 import { auth } from "@/auth"
 
 const ALLOWED_FORMATS = ["pdf", "epub"]
 
-export async function uploadBook(formData: FormData) {
+export async function saveUploadedBook(input: {
+  blobUrl: string
+  title: string
+  format: string
+}) {
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) {
     return { error: "Unauthorized" }
   }
 
-  const file = formData.get("file") as File | null
-
-  if (!file) {
-    return { error: "No file provided" }
-  }
-
-  const extension = file.name.split(".").pop()?.toLowerCase()
-  if (!extension || !ALLOWED_FORMATS.includes(extension)) {
+  const format = input.format.toLowerCase()
+  if (!ALLOWED_FORMATS.includes(format)) {
     return { error: "Only PDF and EPUB files are allowed" }
   }
 
   try {
-    const blob = await put(file.name, file, {
-      access: "private",
-      addRandomSuffix: true,
-    })
-
     await prisma.book.create({
       data: {
-        title: file.name,
-        format: extension as "pdf" | "epub",
-        blobUrl: blob.url,
+        title: input.title,
+        format: format as "pdf" | "epub",
+        blobUrl: input.blobUrl,
         userId,
       },
     })
@@ -45,7 +37,7 @@ export async function uploadBook(formData: FormData) {
     return { success: true }
   } catch (e) {
     return {
-      error: e instanceof Error ? e.message : "Upload failed",
+      error: e instanceof Error ? e.message : "Failed to save book",
     }
   }
 }
