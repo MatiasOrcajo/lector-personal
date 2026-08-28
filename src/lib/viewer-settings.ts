@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useState } from "react"
+
 export type ReaderMode = "light" | "dark" | "sepia"
 export type EpubFlow = "paginated" | "scrolled"
 export type PdfZoomMode = "fit-width" | "fit-page" | "custom"
@@ -71,4 +73,62 @@ export function parsePdfPage(location: string | null): number | null {
   const match = /^page:(\d+)$/.exec(location)
   if (!match) return null
   return Number(match[1])
+}
+
+export type EpubSettings = {
+  fontSize: number
+  epubFlow: EpubFlow
+}
+
+export type PdfSettings = {
+  pdfZoomMode: PdfZoomMode
+  pdfZoom: number
+}
+
+/** @epub-settings-hook Estado de configuración exclusivo del visor EPUB.
+ *  Lee/escribe solo su slice de la misma clave de localStorage para no
+ *  pisar las settings del PDF.
+ *  @keyword hook, settings-epub, fontSize, epubFlow, localStorage */
+export function useEpubViewerSettings() {
+  const [settings, setSettings] = useState<EpubSettings>(() => {
+    const loaded = loadViewerSettings()
+    return { fontSize: loaded.fontSize, epubFlow: loaded.epubFlow }
+  })
+
+  useEffect(() => {
+    saveViewerSettings({ ...loadViewerSettings(), ...settings })
+  }, [settings])
+
+  const setFontSize = useCallback((delta: number) => {
+    setSettings((prev) => ({
+      ...prev,
+      fontSize: Math.min(Math.max(prev.fontSize + delta, 75), 175),
+    }))
+  }, [])
+
+  const toggleFlow = useCallback(() => {
+    setSettings((prev) => ({
+      ...prev,
+      epubFlow: prev.epubFlow === "paginated" ? "scrolled" : "paginated",
+    }))
+  }, [])
+
+  return { settings, setFontSize, toggleFlow }
+}
+
+/** @pdf-settings-hook Estado de configuración exclusivo del visor PDF.
+ *  Lee/escribe solo su slice de la misma clave de localStorage para no
+ *  pisar las settings del EPUB.
+ *  @keyword hook, settings-pdf, zoom, zoomMode, localStorage */
+export function usePdfViewerSettings() {
+  const [zoomMode, setZoomMode] = useState<PdfZoomMode>(() =>
+    loadViewerSettings().pdfZoomMode
+  )
+  const [zoom, setZoom] = useState(() => loadViewerSettings().pdfZoom)
+
+  useEffect(() => {
+    saveViewerSettings({ ...loadViewerSettings(), pdfZoomMode: zoomMode, pdfZoom: zoom })
+  }, [zoomMode, zoom])
+
+  return { zoomMode, setZoomMode, zoom, setZoom }
 }

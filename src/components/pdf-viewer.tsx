@@ -5,16 +5,27 @@ import { Document, Page, pdfjs } from "react-pdf"
 import "react-pdf/dist/Page/TextLayer.css"
 import type { PDFDocumentProxy } from "pdfjs-dist"
 import { Button } from "@/components/ui/button"
-import { ChevronLeft, ChevronRight, LoaderCircle } from "lucide-react"
+import { LoaderCircle } from "lucide-react"
 import {
-  loadViewerSettings,
-  saveViewerSettings,
+  usePdfViewerSettings,
   getEffectiveHighlightColor,
+  parsePdfPage,
   type PdfZoomMode,
   type HighlightColor,
 } from "@/lib/viewer-settings"
 import { HighlightPopover } from "@/components/highlight-popover"
 import { useThemeMode } from "@/components/theme-provider"
+import { ReaderHeader } from "@/components/reader-header"
+import { HighlightSidebar } from "@/components/highlight-sidebar"
+import { ReturnButton } from "@/components/return-button"
+import { saveProgress } from "@/app/actions/progress"
+import {
+  createHighlight,
+  deleteHighlight,
+  getBookHighlights,
+} from "@/app/actions/highlights"
+import type { Highlight as PrismaHighlight } from "@/generated/prisma/client"
+import type { ReaderHighlight } from "@/lib/reader-types"
 
 pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
 
@@ -35,7 +46,11 @@ const CONTINUOUS_GAP = 24
 
 type HighlightRect = { x: number; y: number; width: number; height: number }
 
-export type PdfHighlight = {
+/** @pdf-highlight Resaltado interno del visor PDF: guarda los rects para
+ *  pintar los overlays y la página. Para la barra lateral compartida se mapea
+ *  a ReaderHighlight con location = "page:N".
+ *  @keyword tipo, resaltado-pdf, rects, pagina */
+type PdfHighlight = {
   id: string
   text: string
   color: HighlightColor
@@ -44,38 +59,39 @@ export type PdfHighlight = {
   pageLabel: string | null
 }
 
-export type PdfViewerApi = {
-  goToPage: (page: number) => void
-  getCurrentPage: () => number
-  getNumPages: () => number | null
-}
-
-type PdfViewerProps = {
+/** @pdf-viewer-props Props del visor PDF.
+ *  Es autocontenido: maneja su header, navegación, progreso, resaltados y
+ *  barra lateral. No recibe estado del shell.
+ *  @keyword props, url, titulo, libro, ubicacion-inicial */
+export type PdfViewerProps = {
   url: string
-  initialPage?: number
-  onPageChange?: (page: number) => void
-  onTotalPagesChange?: (total: number) => void
+  title: string
   bookId: string
-  highlights: PdfHighlight[]
-  onCreateHighlight: (highlight: PdfHighlight) => void
-  onDeleteHighlight: (highlightId: string) => void
-  onReady: (api: PdfViewerApi) => void
+  initialLocation: string | null
 }
 
+/** @pdf-viewer Visor de libros PDF (react-pdf/pdfjs).
+ *  Componente autocontenido: render continuo, zoom, resaltados con rects,
+ *  persistencia de progreso (page:N) y barra lateral. No comparte estado
+ *  con el visor EPUB.
+ *  @keyword lector, visor-PDF, pdfjs, resaltado, progreso, zoom,
+ *  navegacion, barra-lateral, Server-Action */
 export function PdfViewer({
   url,
-  initialPage = 1,
-  onPageChange,
-  onTotalPagesChange,
+  title,
   bookId,
-  highlights,
-  onCreateHighlight,
-  onReady,
+  initialLocation,
 }: PdfViewerProps) {
   const { mode } = useThemeMode()
+  const { zoomMode, setZoomMode, zoom, setZoom } = usePdfViewerSettings()
+
+  // ──────────────────────────────────────────────
+  //  @estado-paginas Página actual y total del documento
+  //  @keyword pagina-actual, total-paginas, numPages
+  // ──────────────────────────────────────────────
   const [numPages, setNumPages] = useState<number | null>(null)
   const [pageNumber, setPageNumber] = useState(() =>
-    Math.max(1, initialPage)
+    Math.max(1, parsePdfPage(initialLocation) ?? 1)
   )
   const pageNumberRef = useRef(pageNumber)
   const numPagesRef = useRef<number | null>(null)
@@ -88,10 +104,6 @@ export function PdfViewer({
     numPagesRef.current = numPages
   }, [numPages])
 
-  const [zoomMode, setZoomMode] = useState<PdfZoomMode>(() =>
-    loadViewerSettings().pdfZoomMode
-  )
-  const [zoom, setZoom] = useState(() => loadViewerSettings().pdfZoom)
   const [viewport, setViewport] = useState<{ width: number; height: number } | null>(null)
   const pdfRef = useRef<PDFDocumentProxy | null>(null)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -102,18 +114,34 @@ export function PdfViewer({
   const scrollRafRef = useRef<number | null>(null)
   const pendingCenterRef = useRef(true)
 
+  // ──────────────────────────────────────────────
+  //  @estado-resaltados Selección de texto, popover, resaltados y sidebar
+  //  @keyword resaltado, seleccion-texto, popover, rects, anotacion, sidebar
+  // ──────────────────────────────────────────────
   const [popover, setPopover] = useState<{ x: number; y: number } | null>(null)
   const [selectionText, setSelectionText] = useState<string>("")
+  const [highlights, setHighlights] = useState<PdfHighlight[]>([])
+  const [highlightsLoaded, setHighlightsLoaded] = useState(false)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
+
+  // ──────────────────────────────────────────────
+  //  @estado-retorno Target para botón "Volver a la página anterior"
+  //  @keyword retorno, volver, navegar-resaltado, bookmark-temporal
+  // ──────────────────────────────────────────────
+  const [returnTarget, setReturnTarget] = useState<{
+    pdfPage?: number
+  } | null>(null)
+
+  // ──────────────────────────────────────────────
+  //  @refs Referencias de progreso y navegación a resaltados
+  //  @keyword referencia, ref, progreso, navegacion-resaltado
+  // ──────────────────────────────────────────────
+  const navigatingToHighlightRef = useRef(false)
+  const lastLocationRef = useRef<string | null>(initialLocation)
+  const pdfSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const [loadError, setLoadError] = useState<string | null>(null)
   const [retryKey, setRetryKey] = useState(0)
-
-  useEffect(() => {
-    const settings = loadViewerSettings()
-    settings.pdfZoomMode = zoomMode
-    settings.pdfZoom = zoom
-    saveViewerSettings(settings)
-  }, [zoomMode, zoom])
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -140,6 +168,76 @@ export function PdfViewer({
     return () => observer.disconnect()
   }, [])
 
+  // ──────────────────────────────────────────────
+  //  @persistencia-ubicacion Guarda la última ubicación pendiente al
+  //  desmontar el componente (el progreso se guarda con debounce).
+  //  @keyword persistencia, progreso, cleanup, desmontaje, saveProgress
+  // ──────────────────────────────────────────────
+  useEffect(() => {
+    return () => {
+      if (pdfSaveTimerRef.current) {
+        clearTimeout(pdfSaveTimerRef.current)
+      }
+      const last = lastLocationRef.current
+      if (last) {
+        void saveProgress(bookId, last)
+      }
+    }
+  }, [bookId])
+
+  // ──────────────────────────────────────────────
+  //  @carga-resaltados Carga los resaltados de este libro desde la DB.
+  //  Solo considera los que NO tienen CFI (formato PDF).
+  //  @keyword carga-inicial, base-de-datos, Prisma, Server-Action,
+  //  getBookHighlights, pdfPage, separar-formato
+  // ──────────────────────────────────────────────
+  useEffect(() => {
+    if (highlightsLoaded) return
+    getBookHighlights(bookId).then((items) => {
+      const pdfItems: PdfHighlight[] = []
+      for (const h of items as PrismaHighlight[]) {
+        if (!h.cfi) {
+          pdfItems.push({
+            id: h.id,
+            text: h.text,
+            color: h.color as HighlightColor,
+            pdfRects: h.pdfRects as PdfHighlight["pdfRects"],
+            pdfPage: h.pdfPage,
+            pageLabel: h.pageLabel ?? null,
+          })
+        }
+      }
+      setHighlights(pdfItems)
+      setHighlightsLoaded(true)
+    })
+  }, [bookId, highlightsLoaded])
+
+  // ──────────────────────────────────────────────
+  //  @progreso-pagina Guarda el progreso con debounce en cada cambio de
+  //  página. Si la navegación fue disparada por un click en resaltado,
+  //  resetea la bandera y conserva el returnTarget.
+  //  @keyword progreso, pagina, debounce, saveProgress, returnTarget
+  // ──────────────────────────────────────────────
+  const handlePageChange = useCallback(
+    (page: number) => {
+      lastLocationRef.current = `page:${page}`
+      if (pdfSaveTimerRef.current) {
+        clearTimeout(pdfSaveTimerRef.current)
+      }
+      pdfSaveTimerRef.current = setTimeout(() => {
+        void saveProgress(bookId, `page:${page}`)
+      }, 1200)
+      if (navigatingToHighlightRef.current) {
+        navigatingToHighlightRef.current = false
+        return
+      }
+      if (returnTarget) {
+        setReturnTarget(null)
+      }
+    },
+    [bookId, returnTarget]
+  )
+
   const onDocumentLoadSuccess = useCallback(
     (pdf: PDFDocumentProxy) => {
       setNumPages(pdf.numPages)
@@ -149,9 +247,8 @@ export function PdfViewer({
         pageNumberRef.current = clamped
         return clamped
       })
-      onTotalPagesChange?.(pdf.numPages)
     },
-    [onTotalPagesChange]
+    []
   )
 
   const onLoadError = useCallback((error: Error) => {
@@ -245,6 +342,10 @@ export function PdfViewer({
     )
   }, [offsets, scaledSizes])
 
+  // ──────────────────────────────────────────────
+  //  @ir-a-pagina Navega a un número de página (PageNav, keyboard, sidebar).
+  //  @keyword goTo, ir-a-pagina, scroll, PageNav
+  // ──────────────────────────────────────────────
   const goTo = useCallback(
     (page: number) => {
       const next = Math.min(Math.max(1, page), numPages ?? 1)
@@ -260,26 +361,10 @@ export function PdfViewer({
       if (next === pageNumberRef.current) return
       pageNumberRef.current = next
       setPageNumber(next)
-      onPageChange?.(next)
+      handlePageChange(next)
     },
-    [numPages, onPageChange, offsets]
+    [numPages, handlePageChange, offsets]
   )
-
-  const apiRef = useRef<PdfViewerApi>({
-    goToPage: () => {},
-    getCurrentPage: () => pageNumberRef.current,
-    getNumPages: () => numPagesRef.current,
-  })
-
-  useEffect(() => {
-    apiRef.current.goToPage = goTo
-    apiRef.current.getCurrentPage = () => pageNumberRef.current
-    apiRef.current.getNumPages = () => numPagesRef.current
-  })
-
-  useEffect(() => {
-    onReady(apiRef.current)
-  }, [onReady])
 
   const updateContinuousView = useCallback(() => {
     const el = scrollRef.current
@@ -315,9 +400,9 @@ export function PdfViewer({
     if (current !== pageNumberRef.current) {
       pageNumberRef.current = current
       setPageNumber(current)
-      onPageChange?.(current)
+      handlePageChange(current)
     }
-  }, [offsets, scaledSizes, onPageChange])
+  }, [offsets, scaledSizes, handlePageChange])
 
   const handleScroll = useCallback(() => {
     if (scrollRafRef.current !== null) return
@@ -356,7 +441,7 @@ export function PdfViewer({
         setZoomMode("custom")
       }
     },
-    []
+    [setZoomMode, setZoom]
   )
 
   useEffect(() => {
@@ -386,7 +471,7 @@ export function PdfViewer({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [goTo, zoomMode, zoom])
+  }, [goTo, zoomMode, zoom, setZoomMode, setZoom])
 
   const findPageElement = useCallback((node: Node | null): HTMLElement | null => {
     if (!node) return null
@@ -447,7 +532,9 @@ export function PdfViewer({
         return
       }
 
-      const pageRect = pageEl.getBoundingClientRect()
+      const originEl =
+        pageEl.querySelector<HTMLElement>(".react-pdf__Page") ?? pageEl
+      const pageRect = originEl.getBoundingClientRect()
       const s = scale ?? 1
 
       const pdfRects: HighlightRect[] = Array.from(rects).map((r) => ({
@@ -457,34 +544,91 @@ export function PdfViewer({
         height: r.height / s,
       }))
 
-      import("@/app/actions/highlights").then(({ createHighlight: create }) => {
-        create({
-          bookId,
-          text: selectionText,
-          color,
-          pdfPage: page,
-          pdfRects,
-          pageLabel: page ? `Página ${page}` : undefined,
-        }).then((result) => {
-          if (result.success && result.highlight) {
-            onCreateHighlight({
+      createHighlight({
+        bookId,
+        text: selectionText,
+        color,
+        pdfPage: page,
+        pdfRects,
+        pageLabel: page ? `Página ${page}` : undefined,
+      }).then((result) => {
+        if (result.success && result.highlight) {
+          setHighlights((prev) => [
+            ...prev,
+            {
               id: result.highlight.id,
               text: selectionText,
               color,
               pdfRects,
               pdfPage: page,
               pageLabel: result.highlight.pageLabel ?? null,
-            })
-          }
-        })
+            },
+          ])
+        }
       })
 
       selection.removeAllRanges()
       setPopover(null)
       setSelectionText("")
     },
-    [bookId, selectionText, scale, onCreateHighlight, findPageElement]
+    [bookId, selectionText, scale, findPageElement]
   )
+
+  // ──────────────────────────────────────────────
+  //  @sidebar-items Mapea los resaltados internos a ReaderHighlight para la
+  //  barra lateral compartida. location = "page:N".
+  //  @keyword sidebar, mapeo, ReaderHighlight, location
+  // ──────────────────────────────────────────────
+  const sidebarHighlights = useMemo<ReaderHighlight[]>(
+    () =>
+      highlights.map((h) => ({
+        id: h.id,
+        text: h.text,
+        color: h.color,
+        pageLabel: h.pageLabel,
+        location: h.pdfPage != null ? `page:${h.pdfPage}` : "",
+      })),
+    [highlights]
+  )
+
+  /** @eliminar-resaltado Elimina un resaltado de la DB (Server Action
+   *  deleteHighlight) y lo remueve del estado local.
+   *  @keyword eliminar-resaltado, deleteHighlight, Server-Action, PDF */
+  const handleDeleteHighlight = useCallback((h: ReaderHighlight) => {
+    deleteHighlight(h.id).then((result) => {
+      if (result.success) {
+        setHighlights((prev) => prev.filter((x) => x.id !== h.id))
+      }
+    })
+  }, [])
+
+  /** @navegar-resaltado-pdf Navega a un resaltado por su página.
+   *  Guarda la página actual como returnTarget. Cierra la barra lateral.
+   *  @keyword PDF, navegar-resaltado, goToPage, pagina, returnTarget */
+  const navigateToHighlight = useCallback(
+    (h: ReaderHighlight) => {
+      const match = /^page:(\d+)$/.exec(h.location)
+      if (!match) return
+      const page = Number(match[1])
+      const currentPage = pageNumberRef.current
+      setReturnTarget({ pdfPage: currentPage })
+      navigatingToHighlightRef.current = true
+      goTo(page)
+      setSidebarOpen(false)
+    },
+    [goTo]
+  )
+
+  /** @volver-posicion-anterior Retorna a la página guardada en returnTarget
+   *  (la página desde donde el usuario navegó a un resaltado).
+   *  @keyword volver, retorno, pagina-anterior, bookmark, Undo2 */
+  const handleReturn = useCallback(() => {
+    if (!returnTarget) return
+    if (returnTarget.pdfPage !== undefined) {
+      goTo(returnTarget.pdfPage)
+    }
+    setReturnTarget(null)
+  }, [returnTarget, goTo])
 
   useEffect(() => {
     const container = scrollRef.current
@@ -570,34 +714,21 @@ export function PdfViewer({
       />
     ))
 
+  // ──────────────────────────────────────────────
+  //  @render Renderizado del componente.
+  //  @keyword render, JSX, layout, header, main, sidebar, popover
+  // ──────────────────────────────────────────────
   return (
-    <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex shrink-0 flex-wrap items-center justify-center gap-3 border-b px-4 py-2">
-        <span className="hidden sm:contents">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => goTo(pageNumber - 1)}
-          disabled={pageNumber <= 1}
-        >
-          <ChevronLeft />
-          Anterior
-        </Button>
-        </span>
-        <span className="text-sm tabular-nums text-muted-foreground">
-          Página {pageNumber} de {numPages ?? "—"}
-        </span>
-        <span className="hidden sm:contents">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => goTo(pageNumber + 1)}
-          disabled={numPages !== null && pageNumber >= numPages}
-        >
-          Siguiente
-          <ChevronRight />
-        </Button>
-        </span>
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      <ReaderHeader
+        title={title}
+        currentPage={pageNumber}
+        totalPages={numPages}
+        onNavigate={goTo}
+        onToggleSidebar={() => setSidebarOpen((v) => !v)}
+      >
+        {/** @control-zoom Selector de zoom exclusivo del PDF.
+         *  @keyword zoom, ajustar-ancho, ajustar-pagina, porcentaje */}
         <select
           value={String(zoomMode === "custom" ? zoom : zoomMode)}
           onChange={(e) => handleZoomChange(e.target.value)}
@@ -610,104 +741,130 @@ export function PdfViewer({
             </option>
           ))}
         </select>
-      </div>
+      </ReaderHeader>
 
-      <div
-        ref={scrollRef}
-        onScroll={handleScroll}
-        onMouseUp={handleMouseUp}
-        className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4"
-      >
-        <Document
-          key={retryKey}
-          file={url}
-          onLoadSuccess={onDocumentLoadSuccess}
-          onLoadError={onLoadError}
-          loading={
-            <div className="flex items-center gap-2 py-20 text-muted-foreground">
-              <LoaderCircle className="size-5 animate-spin" />
-              <span>Cargando PDF…</span>
-            </div>
-          }
-          error={
-            <div className="py-20 text-center">
-              <p className="text-destructive">
-                {loadError ?? "Error al cargar el PDF"}
-              </p>
-              <Button
-                variant="outline"
-                size="sm"
-                className="mt-3"
-                onClick={() => {
-                  setLoadError(null)
-                  setRetryKey((k) => k + 1)
-                }}
-              >
-                Reintentar
-              </Button>
-            </div>
-          }
-        >
-          {!scale || !offsets || !scaledSizes ? (
-            <div className="flex items-center gap-2 py-20 text-muted-foreground">
-              <LoaderCircle className="size-5 animate-spin" />
-              <span>Calculando vista…</span>
-            </div>
-          ) : (
-            <div
-              className="pdf-continuous relative w-full"
-              style={{ height: totalHeight }}
-            >
-              {scaledSizes.map((size, i) => {
-                const page = i + 1
-                const isRendered =
-                  renderedRange !== null &&
-                  page >= renderedRange.start + 1 &&
-                  page <= renderedRange.end + 1
-                const pageHighlights = highlights.filter(
-                  (h) => h.pdfPage === page
-                )
-                return (
-                  <div
-                    key={page}
-                    data-page-index={page}
-                    className="pdf-page absolute left-0 w-full"
-                    style={{ top: offsets[i], height: size.height }}
+      <div className="flex min-h-0 flex-1">
+        <main className="relative flex min-h-0 flex-1 flex-col">
+          <div
+            ref={scrollRef}
+            onScroll={handleScroll}
+            onMouseUp={handleMouseUp}
+            className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4"
+          >
+            <Document
+              key={retryKey}
+              file={url}
+              onLoadSuccess={onDocumentLoadSuccess}
+              onLoadError={onLoadError}
+              loading={
+                <div className="flex items-center gap-2 py-20 text-muted-foreground">
+                  <LoaderCircle className="size-5 animate-spin" />
+                  <span>Cargando PDF…</span>
+                </div>
+              }
+              error={
+                <div className="py-20 text-center">
+                  <p className="text-destructive">
+                    {loadError ?? "Error al cargar el PDF"}
+                  </p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => {
+                      setLoadError(null)
+                      setRetryKey((k) => k + 1)
+                    }}
                   >
-                    <div
-                      className="relative mx-auto"
-                      style={{ width: size.width, height: size.height }}
-                    >
-                      {isRendered ? (
-                        <>
-                          <Page
-                            pageNumber={page}
-                            scale={scale}
-                            renderTextLayer={true}
-                            renderAnnotationLayer={false}
-                            loading={
-                              <div className="flex items-center justify-center py-10 text-muted-foreground">
-                                <LoaderCircle className="size-5 animate-spin" />
-                              </div>
-                            }
-                            error={
-                              <div className="py-10 text-center text-destructive">
-                                Error al renderizar la página
-                              </div>
-                            }
-                          />
-                          {pageHighlights.map((h) =>
-                            renderHighlightOverlays(h, scale)
-                          )}
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </Document>
+                    Reintentar
+                  </Button>
+                </div>
+              }
+            >
+              {!scale || !offsets || !scaledSizes ? (
+                <div className="flex items-center gap-2 py-20 text-muted-foreground">
+                  <LoaderCircle className="size-5 animate-spin" />
+                  <span>Calculando vista…</span>
+                </div>
+              ) : (
+                <div
+                  className="pdf-continuous relative w-full"
+                  style={{ height: totalHeight }}
+                >
+                  {scaledSizes.map((size, i) => {
+                    const page = i + 1
+                    const isRendered =
+                      renderedRange !== null &&
+                      page >= renderedRange.start + 1 &&
+                      page <= renderedRange.end + 1
+                    const pageHighlights = highlights.filter(
+                      (h) => h.pdfPage === page
+                    )
+                    return (
+                      <div
+                        key={page}
+                        data-page-index={page}
+                        className="pdf-page absolute left-0 w-full"
+                        style={{ top: offsets[i], height: size.height }}
+                      >
+                        <div
+                          className="relative mx-auto"
+                          style={{ width: size.width, height: size.height }}
+                        >
+                          {isRendered ? (
+                            <>
+                              <Page
+                                pageNumber={page}
+                                scale={scale}
+                                renderTextLayer={true}
+                                renderAnnotationLayer={false}
+                                loading={
+                                  <div className="flex items-center justify-center py-10 text-muted-foreground">
+                                    <LoaderCircle className="size-5 animate-spin" />
+                                  </div>
+                                }
+                                error={
+                                  <div className="py-10 text-center text-destructive">
+                                    Error al renderizar la página
+                                  </div>
+                                }
+                              />
+                              {pageHighlights.map((h) =>
+                                renderHighlightOverlays(h, scale)
+                              )}
+                            </>
+                          ) : null}
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+            </Document>
+          </div>
+
+          {/**
+           * @boton-retorno Botón flotante "Volver a la página anterior".
+           *  Visible solo cuando returnTarget no es null (el usuario navegó
+           *  a un resaltado desde otra página).
+           *  @keyword boton-retorno, volver, pagina-anterior, Undo2, flotante */}
+          <ReturnButton
+            visible={!!returnTarget}
+            onReturn={handleReturn}
+          />
+        </main>
+
+        {/**
+         * @barra-lateral-resaltados Barra lateral con la lista de resaltados.
+         *  @keyword sidebar, barra-lateral, resaltados, lista, navegar,
+         *  eliminar, color, pagina */}
+        <HighlightSidebar
+          open={sidebarOpen}
+          highlights={sidebarHighlights}
+          onClose={() => setSidebarOpen(false)}
+          onNavigate={navigateToHighlight}
+          onDelete={handleDeleteHighlight}
+        />
       </div>
 
       {popover && (
