@@ -5,7 +5,7 @@ import { Document, Page, pdfjs } from "react-pdf"
 import "react-pdf/dist/Page/TextLayer.css"
 import type { PDFDocumentProxy } from "pdfjs-dist"
 import { Button } from "@/components/ui/button"
-import { LoaderCircle } from "lucide-react"
+import { LoaderCircle, PanelLeft } from "lucide-react"
 import {
   usePdfViewerSettings,
   getEffectiveHighlightColor,
@@ -13,6 +13,7 @@ import {
   type PdfZoomMode,
   type HighlightColor,
 } from "@/lib/viewer-settings"
+import { PdfThumbnails } from "@/components/pdf-thumbnails"
 import { HighlightPopover } from "@/components/highlight-popover"
 import { useThemeMode } from "@/components/theme-provider"
 import { ReaderHeader } from "@/components/reader-header"
@@ -123,6 +124,7 @@ export function PdfViewer({
   const [highlights, setHighlights] = useState<PdfHighlight[]>([])
   const [highlightsLoaded, setHighlightsLoaded] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [thumbnailsOpen, setThumbnailsOpen] = useState(false)
 
   // ──────────────────────────────────────────────
   //  @estado-retorno Target para botón "Volver a la página anterior"
@@ -166,7 +168,10 @@ export function PdfViewer({
     })
     observer.observe(el)
     return () => observer.disconnect()
-  }, [])
+    // numPages: el contenedor de scroll se monta recién cuando el
+    // <Document> termina de cargar (numPages pasa de null a un número);
+    // con deps vacías el observer nunca se adjuntaba y el zoom quedaba en 0.
+  }, [numPages])
 
   // ──────────────────────────────────────────────
   //  @persistencia-ubicacion Guarda la última ubicación pendiente al
@@ -727,6 +732,19 @@ export function PdfViewer({
         onNavigate={goTo}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
       >
+        {/** @toggle-miniaturas Botón para abrir el panel de miniaturas en
+         *  pantallas chicas (en desktop el panel es siempre visible).
+         *  @keyword miniaturas, toggle, mobile, overlay */}
+        <Button
+          variant="outline"
+          size="sm"
+          className="sm:hidden"
+          onClick={() => setThumbnailsOpen((v) => !v)}
+          aria-label="Miniaturas"
+        >
+          <PanelLeft className="size-4" />
+        </Button>
+
         {/** @control-zoom Selector de zoom exclusivo del PDF.
          *  @keyword zoom, ajustar-ancho, ajustar-pagina, porcentaje */}
         <select
@@ -744,44 +762,69 @@ export function PdfViewer({
       </ReaderHeader>
 
       <div className="flex min-h-0 flex-1">
-        <main className="relative flex min-h-0 flex-1 flex-col">
-          <div
-            ref={scrollRef}
-            onScroll={handleScroll}
-            onMouseUp={handleMouseUp}
-            className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4"
-          >
-            <Document
-              key={retryKey}
-              file={url}
-              onLoadSuccess={onDocumentLoadSuccess}
-              onLoadError={onLoadError}
-              loading={
-                <div className="flex items-center gap-2 py-20 text-muted-foreground">
-                  <LoaderCircle className="size-5 animate-spin" />
-                  <span>Cargando PDF…</span>
-                </div>
-              }
-              error={
-                <div className="py-20 text-center">
-                  <p className="text-destructive">
-                    {loadError ?? "Error al cargar el PDF"}
-                  </p>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="mt-3"
-                    onClick={() => {
-                      setLoadError(null)
-                      setRetryKey((k) => k + 1)
-                    }}
-                  >
-                    Reintentar
-                  </Button>
-                </div>
-              }
-            >
-              {!scale || !offsets || !scaledSizes ? (
+        {/**
+         * @document-pdf El <Document> envuelve el área completa (miniaturas +
+         *  visor) para que ambos compartan la misma instancia pdfjs y el
+         *  archivo se descargue una sola vez. Loading/error reemplazan todo
+         *  hasta que el documento está listo.
+         *  @keyword Document, pdfjs, instancia-compartida, loading, error */}
+        <Document
+          key={retryKey}
+          file={url}
+          className="min-h-0 flex-1"
+          onLoadSuccess={onDocumentLoadSuccess}
+          onLoadError={onLoadError}
+          loading={
+            <div className="flex items-center gap-2 py-20 text-muted-foreground">
+              <LoaderCircle className="size-5 animate-spin" />
+              <span>Cargando PDF…</span>
+            </div>
+          }
+          error={
+            <div className="py-20 text-center">
+              <p className="text-destructive">
+                {loadError ?? "Error al cargar el PDF"}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3"
+                onClick={() => {
+                  setLoadError(null)
+                  setRetryKey((k) => k + 1)
+                }}
+              >
+                Reintentar
+              </Button>
+            </div>
+          }
+        >
+<div className="flex h-full w-full min-h-0">
+            {/**
+             * @panel-miniaturas Vista previa del PDF (estilo Adobe): miniaturas
+             *  con scroll interno, página en lectura marcada por defecto y
+             *  click para navegar. Siempre visible en desktop; overlay en mobile.
+             *  @keyword miniaturas, vista-previa, panel, Adobe, pagina-activa */}
+            {pageSizes && (
+              <PdfThumbnails
+                open={thumbnailsOpen}
+                onClose={() => setThumbnailsOpen(false)}
+                pageSizes={pageSizes}
+                currentPage={pageNumber}
+                onNavigate={(page) => {
+                  goTo(page)
+                  setThumbnailsOpen(false)
+                }}
+              />
+            )}
+            <main className="relative flex min-h-0 flex-1 flex-col">
+              <div
+                ref={scrollRef}
+                onScroll={handleScroll}
+                onMouseUp={handleMouseUp}
+                className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4"
+              >
+                {!scale || !offsets || !scaledSizes ? (
                 <div className="flex items-center gap-2 py-20 text-muted-foreground">
                   <LoaderCircle className="size-5 animate-spin" />
                   <span>Calculando vista…</span>
@@ -840,19 +883,20 @@ export function PdfViewer({
                   })}
                 </div>
               )}
-            </Document>
-          </div>
+              </div>
 
-          {/**
-           * @boton-retorno Botón flotante "Volver a la página anterior".
-           *  Visible solo cuando returnTarget no es null (el usuario navegó
-           *  a un resaltado desde otra página).
-           *  @keyword boton-retorno, volver, pagina-anterior, Undo2, flotante */}
-          <ReturnButton
-            visible={!!returnTarget}
-            onReturn={handleReturn}
-          />
-        </main>
+              {/**
+               * @boton-retorno Botón flotante "Volver a la página anterior".
+               *  Visible solo cuando returnTarget no es null (el usuario navegó
+               *  a un resaltado desde otra página).
+               *  @keyword boton-retorno, volver, pagina-anterior, Undo2, flotante */}
+              <ReturnButton
+                visible={!!returnTarget}
+                onReturn={handleReturn}
+              />
+            </main>
+          </div>
+        </Document>
 
         {/**
          * @barra-lateral-resaltados Barra lateral con la lista de resaltados.

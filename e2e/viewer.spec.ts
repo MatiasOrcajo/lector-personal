@@ -22,7 +22,7 @@ test.describe("PDF viewer", () => {
     await expect(page.getByLabel("Zoom")).toBeVisible()
     await expect(page.locator("canvas").first()).toBeVisible()
     await expect(page.getByLabel("Página anterior")).toBeDisabled()
-    await expect(page.getByLabel("Página siguiente")).toBeDisabled()
+    await expect(page.getByLabel("Página siguiente")).toBeEnabled()
   })
 
   test("shows the seeded highlight in the sidebar", async ({ page }) => {
@@ -30,8 +30,9 @@ test.describe("PDF viewer", () => {
     await page.goto(`/read/${pdfBookId}`)
 
     await page.getByRole("button", { name: "Resaltados" }).click()
-    await expect(page.getByText("Hello PDF")).toBeVisible()
-    await expect(page.getByText("Página 1")).toBeVisible()
+    const sidebar = page.locator("aside").filter({ hasText: "Mis Resaltados" })
+    await expect(sidebar.getByText("Hello PDF")).toBeVisible()
+    await expect(sidebar.getByText("Página 1")).toBeVisible()
   })
 
   test("changes the zoom from the select", async ({ page }) => {
@@ -41,6 +42,39 @@ test.describe("PDF viewer", () => {
     const zoom = page.getByLabel("Zoom")
     await zoom.selectOption("2")
     await expect(zoom).toHaveValue("2")
+  })
+
+  test("shows the thumbnails panel with the current page marked", async ({
+    page,
+  }) => {
+    await setAuthCookie(page, userId)
+    await page.goto(`/read/${pdfBookId}`)
+
+    const panel = page.getByRole("complementary", {
+      name: "Miniaturas de páginas",
+    })
+    await expect(panel).toBeVisible()
+    await expect(panel.locator("canvas").first()).toBeVisible({
+      timeout: 20_000,
+    })
+    await expect(panel.locator("[data-thumb-active='true']")).toContainText("1")
+  })
+
+  test("navigates by clicking a thumbnail and keeps the active marker", async ({
+    page,
+  }) => {
+    await setAuthCookie(page, userId)
+    await page.goto(`/read/${pdfBookId}`)
+
+    const panel = page.getByRole("complementary", {
+      name: "Miniaturas de páginas",
+    })
+    await expect(panel.locator("canvas").first()).toBeVisible({
+      timeout: 20_000,
+    })
+    await panel.getByLabel("Página 4").click()
+    await expect(page.getByLabel("Ir a página")).toHaveValue("4")
+    await expect(panel.locator("[data-thumb-active='true']")).toContainText("4")
   })
 
   test("keeps the reader state after a reload (progress)", async ({

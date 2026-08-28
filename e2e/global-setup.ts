@@ -11,31 +11,37 @@ export const E2E_USER_NAME = "E2E User"
 
 const STATE_PATH = path.join(__dirname, ".state.json")
 
-/** Genera un PDF mínimo de una página con offsets de xref correctos. */
+/** Genera un PDF mínimo de 4 páginas con offsets de xref correctos. */
 function buildPdf(): Uint8Array {
   const objects: Record<number, string> = {
     1: "<< /Type /Catalog /Pages 2 0 R >>",
-    2: "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-    3: "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>",
-    4: null as unknown as string,
-    5: "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
   }
-  const stream = "BT /F1 24 Tf 72 720 Td (Hello PDF) Tj ET"
-  objects[4] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+  const kids: string[] = []
+  for (let p = 0; p < 4; p++) {
+    const pageObj = 3 + p * 2
+    const contentObj = 4 + p * 2
+    kids.push(`${pageObj} 0 R`)
+    const stream = `BT /F1 24 Tf 72 720 Td (Hello PDF - page ${p + 1}) Tj ET`
+    objects[contentObj] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`
+    objects[pageObj] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contentObj} 0 R /Resources << /Font << /F1 4 0 R >> >> >>`
+  }
+  objects[2] = `<< /Type /Pages /Kids [${kids.join(" ")}] /Count 4 >>`
+  objects[4] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
 
   let pdf = "%PDF-1.4\n"
   const offsets: Record<number, number> = {}
-  for (let i = 1; i <= 5; i++) {
+  const count = Object.keys(objects).length
+  for (let i = 1; i <= count; i++) {
     offsets[i] = pdf.length
     pdf += `${i} 0 obj\n${objects[i]}\nendobj\n`
   }
   const xrefStart = pdf.length
-  let xref = "xref\n0 6\n0000000000 65535 f \n"
-  for (let i = 1; i <= 5; i++) {
+  let xref = `xref\n0 ${count + 1}\n0000000000 65535 f \n`
+  for (let i = 1; i <= count; i++) {
     xref += `${String(offsets[i]).padStart(10, "0")} 00000 n \n`
   }
   pdf += xref
-  pdf += `trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`
+  pdf += `trailer\n<< /Size ${count + 1} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF\n`
   return strToU8(pdf)
 }
 
