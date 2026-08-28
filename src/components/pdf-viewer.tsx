@@ -125,6 +125,8 @@ export function PdfViewer({
   const [highlightsLoaded, setHighlightsLoaded] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [thumbnailsOpen, setThumbnailsOpen] = useState(false)
+  const selectionRangeRef = useRef<Range | null>(null)
+  const selectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // ──────────────────────────────────────────────
   //  @estado-retorno Target para botón "Volver a la página anterior"
@@ -484,41 +486,65 @@ export function PdfViewer({
     return el?.closest<HTMLElement>("[data-page-index]") ?? null
   }, [])
 
-  const handleMouseUp = useCallback(() => {
-    setTimeout(() => {
-      const selection = window.getSelection()
-      if (!selection || selection.isCollapsed || !selection.toString().trim()) {
-        return
-      }
+  /** @mostrar-popover-seleccion Muestra el popover de colores si hay una
+   *  selección de texto válida dentro de una página del PDF. Guarda una
+   *  copia del Range para que el resaltado funcione aunque la selección
+   *  viva se colapse (p. ej. al tocar un color en móvil).
+   *  @keyword popover, seleccion, range, mobile, touch */
+  const showPopoverForSelection = useCallback(() => {
+    const selection = window.getSelection()
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+      return
+    }
 
-      const pageEl = findPageElement(selection.anchorNode)
-      if (!pageEl) return
+    const pageEl = findPageElement(selection.anchorNode)
+    if (!pageEl) return
 
-      const text = selection.toString().trim()
-      if (!text) return
+    const text = selection.toString().trim()
+    if (!text) return
 
-      const range = selection.getRangeAt(0)
-      const rects = range.getClientRects()
-      if (rects.length === 0) return
+    const range = selection.getRangeAt(0)
+    const rects = range.getClientRects()
+    if (rects.length === 0) return
 
-      const firstRect = rects[0]
-      setPopover({
-        x: firstRect.left + firstRect.width / 2,
-        y: firstRect.top,
-      })
-      setSelectionText(text)
-    }, 0)
+    selectionRangeRef.current = range.cloneRange()
+    const firstRect = rects[0]
+    setPopover({
+      x: firstRect.left + firstRect.width / 2,
+      y: firstRect.top,
+    })
+    setSelectionText(text)
   }, [findPageElement])
+
+  const handleMouseUp = useCallback(() => {
+    setTimeout(showPopoverForSelection, 0)
+  }, [showPopoverForSelection])
+
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      if (selectionTimerRef.current) {
+        clearTimeout(selectionTimerRef.current)
+      }
+      selectionTimerRef.current = setTimeout(showPopoverForSelection, 300)
+    }
+    document.addEventListener("selectionchange", handleSelectionChange)
+    return () => {
+      document.removeEventListener("selectionchange", handleSelectionChange)
+      if (selectionTimerRef.current) {
+        clearTimeout(selectionTimerRef.current)
+      }
+    }
+  }, [showPopoverForSelection])
 
   const handleColorSelect = useCallback(
     (color: HighlightColor) => {
-      const selection = window.getSelection()
-      if (!selection || !selectionText) {
+      const range = selectionRangeRef.current
+      if (!range || !selectionText) {
         setPopover(null)
         return
       }
 
-      const pageEl = findPageElement(selection.anchorNode)
+      const pageEl = findPageElement(range.startContainer)
       if (!pageEl) {
         setPopover(null)
         return
@@ -530,7 +556,6 @@ export function PdfViewer({
         return
       }
 
-      const range = selection.getRangeAt(0)
       const rects = range.getClientRects()
       if (rects.length === 0) {
         setPopover(null)
@@ -572,7 +597,8 @@ export function PdfViewer({
         }
       })
 
-      selection.removeAllRanges()
+      window.getSelection()?.removeAllRanges()
+      selectionRangeRef.current = null
       setPopover(null)
       setSelectionText("")
     },
@@ -919,6 +945,7 @@ export function PdfViewer({
           onClose={() => {
             setPopover(null)
             setSelectionText("")
+            selectionRangeRef.current = null
             window.getSelection()?.removeAllRanges()
           }}
         />
