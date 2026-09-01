@@ -58,12 +58,14 @@ export function FolderCard({ id, name, bookCount }: FolderCardProps) {
     <>
       <div className="relative">
         <Link href={`/?folder=${id}`} className="block">
-          <div className="group flex aspect-[3/4] flex-col items-center justify-center gap-3 rounded-xl bg-muted/30 transition-colors hover:bg-muted/50">
-            <Folder className="size-12 text-muted-foreground" />
-            <span className="text-sm font-medium">{name}</span>
-            <span className="text-xs text-muted-foreground">
-              {bookCount} {bookCount === 1 ? "libro" : "libros"}
-            </span>
+          <div className="group flex items-center gap-3 rounded-xl bg-muted/30 px-4 py-3 transition-colors hover:bg-muted/50">
+            <Folder className="size-6 shrink-0 text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium">{name}</p>
+              <p className="text-xs text-muted-foreground">
+                {bookCount} {bookCount === 1 ? "libro" : "libros"}
+              </p>
+            </div>
           </div>
         </Link>
         <div className="absolute right-1 top-1 z-10">

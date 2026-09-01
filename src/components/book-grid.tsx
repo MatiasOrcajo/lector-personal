@@ -11,7 +11,7 @@ type BookGridProps = {
 }
 
 export async function BookGrid({ userId, folderId }: BookGridProps) {
-  const [books, folders] = await Promise.all([
+  const [books, folders, allHighlights] = await Promise.all([
     prisma.book.findMany({
       where: { userId, folderId: folderId ?? null },
       orderBy: { createdAt: "desc" },
@@ -25,7 +25,49 @@ export async function BookGrid({ userId, folderId }: BookGridProps) {
         _count: { select: { books: true } },
       },
     }),
+    prisma.highlight.findMany({
+      where: { userId },
+      orderBy: { createdAt: "desc" },
+      include: {
+        book: {
+          select: {
+            id: true,
+            title: true,
+            displayTitle: true,
+            format: true,
+            coverUrl: true,
+            blobUrl: true,
+            folderId: true,
+          },
+        },
+      },
+    }),
   ])
+
+  const seenBooks = new Set<string>()
+  const highlightedBooks = allHighlights.filter((h) => {
+    if (seenBooks.has(h.bookId)) return false
+    seenBooks.add(h.bookId)
+    return true
+  })
+
+  const mostRecentHighlightAt = new Map<string, number>()
+  for (const h of allHighlights) {
+    if (!mostRecentHighlightAt.has(h.bookId)) {
+      mostRecentHighlightAt.set(h.bookId, h.createdAt.getTime())
+    }
+  }
+
+  const sortedBooks = [...books].sort((a, b) => {
+    const aHighlight = mostRecentHighlightAt.get(a.id)
+    const bHighlight = mostRecentHighlightAt.get(b.id)
+    if (aHighlight !== undefined && bHighlight !== undefined) {
+      return bHighlight - aHighlight
+    }
+    if (aHighlight !== undefined) return -1
+    if (bHighlight !== undefined) return 1
+    return b.createdAt.getTime() - a.createdAt.getTime()
+  })
 
   if (folderId) {
     const folder = folders.find((f) => f.id === folderId)
@@ -69,7 +111,7 @@ export async function BookGrid({ userId, folderId }: BookGridProps) {
           </Button>
         </Link>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {books.map((book) => (
+          {sortedBooks.map((book) => (
             <BookCard
               key={book.id}
               id={book.id}
@@ -106,28 +148,53 @@ export async function BookGrid({ userId, folderId }: BookGridProps) {
   const folderList = folders.map((f) => ({ id: f.id, name: f.name }))
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-      {folders.map((folder) => (
-        <FolderCard
-          key={folder.id}
-          id={folder.id}
-          name={folder.name}
-          bookCount={folder._count.books}
-        />
-      ))}
-      {books.map((book) => (
-        <BookCard
-          key={book.id}
-          id={book.id}
-          title={book.title}
-          displayTitle={book.displayTitle}
-          format={book.format}
-          coverUrl={book.coverUrl}
-          blobUrl={book.blobUrl}
-          folderId={book.folderId}
-          folders={folderList}
-        />
-      ))}
+    <div>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        {folders.map((folder) => (
+          <FolderCard
+            key={folder.id}
+            id={folder.id}
+            name={folder.name}
+            bookCount={folder._count.books}
+          />
+        ))}
+        {books.map((book) => (
+          <BookCard
+            key={book.id}
+            id={book.id}
+            title={book.title}
+            displayTitle={book.displayTitle}
+            format={book.format}
+            coverUrl={book.coverUrl}
+            blobUrl={book.blobUrl}
+            folderId={book.folderId}
+            folders={folderList}
+          />
+        ))}
+      </div>
+
+      {highlightedBooks.length > 0 && (
+        <div className="mt-8">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {highlightedBooks.map((h) => {
+              const book = h.book
+              return (
+                <BookCard
+                  key={book.id}
+                  id={book.id}
+                  title={book.title}
+                  displayTitle={book.displayTitle}
+                  format={book.format}
+                  coverUrl={book.coverUrl}
+                  blobUrl={book.blobUrl}
+                  folderId={book.folderId}
+                  folders={folderList}
+                />
+              )
+            })}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
