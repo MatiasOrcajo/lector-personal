@@ -1,11 +1,11 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
 import { Document, Page, pdfjs } from "react-pdf"
 import "react-pdf/dist/Page/TextLayer.css"
 import type { PDFDocumentProxy } from "pdfjs-dist"
 import { Button } from "@/components/ui/button"
-import { LoaderCircle, PanelLeft } from "lucide-react"
+import { LoaderCircle } from "lucide-react"
 import {
   usePdfViewerSettings,
   getEffectiveHighlightColor,
@@ -124,7 +124,6 @@ export function PdfViewer({
   const [highlights, setHighlights] = useState<PdfHighlight[]>([])
   const [highlightsLoaded, setHighlightsLoaded] = useState(false)
   const [sidebarOpen, setSidebarOpen] = useState(false)
-  const [thumbnailsOpen, setThumbnailsOpen] = useState(false)
   const selectionRangeRef = useRef<Range | null>(null)
   const selectionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -516,9 +515,13 @@ export function PdfViewer({
     setSelectionText(text)
   }, [findPageElement])
 
-  const handleMouseUp = useCallback(() => {
-    setTimeout(showPopoverForSelection, 0)
-  }, [showPopoverForSelection])
+  const handleMouseUp = useCallback(
+    (e: ReactMouseEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return
+      setTimeout(showPopoverForSelection, 0)
+    },
+    [showPopoverForSelection]
+  )
 
   useEffect(() => {
     const handleSelectionChange = () => {
@@ -758,19 +761,6 @@ export function PdfViewer({
         onNavigate={goTo}
         onToggleSidebar={() => setSidebarOpen((v) => !v)}
       >
-        {/** @toggle-miniaturas Botón para abrir el panel de miniaturas en
-         *  pantallas chicas (en desktop el panel es siempre visible).
-         *  @keyword miniaturas, toggle, mobile, overlay */}
-        <Button
-          variant="outline"
-          size="sm"
-          className="sm:hidden"
-          onClick={() => setThumbnailsOpen((v) => !v)}
-          aria-label="Miniaturas"
-        >
-          <PanelLeft className="size-4" />
-        </Button>
-
         {/** @control-zoom Selector de zoom exclusivo del PDF.
          *  @keyword zoom, ajustar-ancho, ajustar-pagina, porcentaje */}
         <select
@@ -829,18 +819,13 @@ export function PdfViewer({
             {/**
              * @panel-miniaturas Vista previa del PDF (estilo Adobe): miniaturas
              *  con scroll interno, página en lectura marcada por defecto y
-             *  click para navegar. Siempre visible en desktop; overlay en mobile.
+             *  click para navegar. Solo visible en desktop (≥ lg).
              *  @keyword miniaturas, vista-previa, panel, Adobe, pagina-activa */}
             {pageSizes && (
               <PdfThumbnails
-                open={thumbnailsOpen}
-                onClose={() => setThumbnailsOpen(false)}
                 pageSizes={pageSizes}
                 currentPage={pageNumber}
-                onNavigate={(page) => {
-                  goTo(page)
-                  setThumbnailsOpen(false)
-                }}
+                onNavigate={goTo}
               />
             )}
             <main className="relative flex min-h-0 flex-1 flex-col">

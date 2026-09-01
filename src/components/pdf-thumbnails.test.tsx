@@ -25,15 +25,12 @@ beforeEach(() => {
 })
 
 function renderThumbs(overrides: {
-  open?: boolean
   currentPage?: number
   onNavigate?: (page: number) => void
 } = {}) {
   const onNavigate = overrides.onNavigate ?? vi.fn()
   render(
     <PdfThumbnails
-      open={overrides.open ?? false}
-      onClose={vi.fn()}
       pageSizes={pageSizes}
       currentPage={overrides.currentPage ?? 1}
       onNavigate={onNavigate}

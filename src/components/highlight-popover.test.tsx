@@ -45,4 +45,10 @@ describe("HighlightPopover", () => {
     fireEvent.mouseDown(document.body)
     expect(onClose).toHaveBeenCalled()
   })
+
+  it("does not close on right-click outside (keeps text selection for copy)", () => {
+    const { onClose } = renderPopover()
+    fireEvent.mouseDown(document.body, { button: 2 })
+    expect(onClose).not.toHaveBeenCalled()
+  })
 })

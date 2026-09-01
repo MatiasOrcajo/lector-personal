@@ -24,6 +24,7 @@ export function HighlightPopover({ x, y, onSelect, onClose }: HighlightPopoverPr
 
   const handleClickOutside = useCallback(
     (e: MouseEvent) => {
+      if (e.button !== 0) return
       if (ref.current && !ref.current.contains(e.target as Node)) {
         onClose()
       }

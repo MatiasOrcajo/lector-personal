@@ -2,8 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Page } from "react-pdf"
-import { LoaderCircle, X } from "lucide-react"
-import { Button } from "@/components/ui/button"
+import { LoaderCircle } from "lucide-react"
 import { cn } from "@/lib/utils"
 
 const THUMB_WIDTH = 132
@@ -14,8 +13,6 @@ const RENDER_BUFFER = 2
 /** @pdf-thumbnails-props Props del panel de miniaturas del visor PDF.
  *  @keyword props, abrir, cerrar, tamano-paginas, pagina-actual, navegar */
 type PdfThumbnailsProps = {
-  open: boolean
-  onClose: () => void
   pageSizes: { width: number; height: number }[]
   currentPage: number
   onNavigate: (page: number) => void
@@ -26,13 +23,10 @@ type PdfThumbnailsProps = {
  *  lectura (por defecto) y navega al hacer click. Se renderiza dentro del
  *  mismo <Document> del visor (comparte la instancia pdfjs, sin segunda
  *  descarga) y virtualiza el render de miniaturas según el scroll del panel.
- *  En desktop es siempre visible; en mobile es un overlay deslizable
- *  controlado por `open`.
+ *  Solo visible en pantallas grandes (≥ lg); en mobile queda oculto.
  *  @keyword miniaturas, vista-previa, panel-lateral, Adobe, virtualizacion,
- *  pagina-activa, scroll-interno, overlay */
+ *  pagina-activa, scroll-interno, desktop */
 export function PdfThumbnails({
-  open,
-  onClose,
   pageSizes,
   currentPage,
   onNavigate,
@@ -124,7 +118,7 @@ export function PdfThumbnails({
 
   useEffect(() => {
     updateVisibleRange()
-  }, [offsets, updateVisibleRange, open])
+  }, [offsets, updateVisibleRange])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -139,30 +133,16 @@ export function PdfThumbnails({
    *  @keyword pagina-activa, scrollIntoView, marcado, sincronizacion */
   useEffect(() => {
     activeRef.current?.scrollIntoView?.({ block: "nearest" })
-  }, [currentPage, open])
+  }, [currentPage])
 
   if (!thumbScales || !thumbSizes || !offsets || offsets.length === 0) {
     return (
       <aside
         aria-label="Miniaturas de páginas"
-        className={cn(
-          "flex shrink-0 flex-col border-r bg-background",
-          open ? "fixed inset-y-0 left-0 z-50 w-56" : "hidden sm:relative sm:flex sm:w-44"
-        )}
+        className="hidden shrink-0 flex-col border-r bg-background lg:flex lg:w-44"
       >
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <h2 className="text-xs font-medium text-muted-foreground sm:text-sm sm:text-foreground">
-            Páginas
-          </h2>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            className="sm:hidden"
-            onClick={onClose}
-            aria-label="Cerrar miniaturas"
-          >
-            <X className="size-4" />
-          </Button>
+          <h2 className="text-sm font-medium text-foreground">Páginas</h2>
         </div>
         <div className="flex min-h-0 flex-1 items-center justify-center overflow-y-auto p-3 text-muted-foreground">
           <LoaderCircle className="size-4 animate-spin" />
@@ -172,42 +152,18 @@ export function PdfThumbnails({
   }
 
   return (
-    <>
-      {open && (
-        <div
-          className="fixed inset-0 z-40 bg-black/40 sm:hidden"
-          onClick={onClose}
-          aria-hidden="true"
-        />
-      )}
-      <aside
-        aria-label="Miniaturas de páginas"
-        className={cn(
-          "flex shrink-0 flex-col border-r bg-background",
-          open
-            ? "fixed inset-y-0 left-0 z-50 w-56"
-            : "hidden sm:relative sm:flex sm:w-44"
-        )}
+    <aside
+      aria-label="Miniaturas de páginas"
+      className="hidden shrink-0 flex-col border-r bg-background lg:flex lg:w-44"
+    >
+      <div className="flex items-center justify-between border-b px-3 py-2">
+        <h2 className="text-sm font-medium text-foreground">Páginas</h2>
+      </div>
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="min-h-0 flex-1 overflow-y-auto p-3"
       >
-        <div className="flex items-center justify-between border-b px-3 py-2">
-          <h2 className="text-xs font-medium text-muted-foreground sm:text-sm sm:text-foreground">
-            Páginas
-          </h2>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            className="sm:hidden"
-            onClick={onClose}
-            aria-label="Cerrar miniaturas"
-          >
-            <X className="size-4" />
-          </Button>
-        </div>
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="min-h-0 flex-1 overflow-y-auto p-3"
-        >
           <div className="relative w-full" style={{ height: totalHeight }}>
             {offsets.map((top, i) => {
               const page = i + 1
@@ -273,6 +229,5 @@ export function PdfThumbnails({
           </div>
         </div>
       </aside>
-    </>
   )
 }
