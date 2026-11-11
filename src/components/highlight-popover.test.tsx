@@ -13,17 +13,17 @@ function renderPopover(onSelect = vi.fn(), onClose = vi.fn()) {
 describe("HighlightPopover", () => {
   it("renders the five highlight colors", () => {
     renderPopover()
-    expect(screen.getByLabelText("Resaltar en yellow")).toBeInTheDocument()
-    expect(screen.getByLabelText("Resaltar en green")).toBeInTheDocument()
-    expect(screen.getByLabelText("Resaltar en blue")).toBeInTheDocument()
-    expect(screen.getByLabelText("Resaltar en pink")).toBeInTheDocument()
-    expect(screen.getByLabelText("Resaltar en orange")).toBeInTheDocument()
+    expect(screen.getByLabelText("Resaltar en amarillo")).toBeInTheDocument()
+    expect(screen.getByLabelText("Resaltar en verde")).toBeInTheDocument()
+    expect(screen.getByLabelText("Resaltar en azul")).toBeInTheDocument()
+    expect(screen.getByLabelText("Resaltar en rosa")).toBeInTheDocument()
+    expect(screen.getByLabelText("Resaltar en naranja")).toBeInTheDocument()
   })
 
   it("calls onSelect with the chosen color", async () => {
     const user = userEvent.setup()
     const { onSelect } = renderPopover()
-    await user.click(screen.getByLabelText("Resaltar en blue"))
+    await user.click(screen.getByLabelText("Resaltar en azul"))
     expect(onSelect).toHaveBeenCalledWith("blue")
   })
 
@@ -50,5 +50,29 @@ describe("HighlightPopover", () => {
     const { onClose } = renderPopover()
     fireEvent.mouseDown(document.body, { button: 2 })
     expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it("is placed above the selection when there is room", () => {
+    render(
+      <HighlightPopover x={300} y={500} bottom={520} onSelect={vi.fn()} onClose={vi.fn()} />
+    )
+    const toolbar = screen.getByRole("toolbar", { name: "Resaltar selección" })
+    expect(parseFloat(toolbar.style.top)).toBeLessThan(500)
+  })
+
+  it("moves below the selection when it would not fit above", () => {
+    render(
+      <HighlightPopover x={300} y={20} bottom={40} onSelect={vi.fn()} onClose={vi.fn()} />
+    )
+    const toolbar = screen.getByRole("toolbar", { name: "Resaltar selección" })
+    expect(parseFloat(toolbar.style.top)).toBeGreaterThanOrEqual(40)
+  })
+
+  it("stays inside the viewport horizontally", () => {
+    render(
+      <HighlightPopover x={window.innerWidth} y={500} onSelect={vi.fn()} onClose={vi.fn()} />
+    )
+    const toolbar = screen.getByRole("toolbar", { name: "Resaltar selección" })
+    expect(parseFloat(toolbar.style.left)).toBeLessThan(window.innerWidth - 200)
   })
 })

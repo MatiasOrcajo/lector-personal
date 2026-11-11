@@ -5,6 +5,7 @@ import { Moon, Sun, Sunset } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { useThemeMode } from "@/components/theme-provider"
 import type { ReaderMode } from "@/lib/viewer-settings"
+import { cn } from "@/lib/utils"
 
 const MODES: { value: ReaderMode; label: string; icon: typeof Sun }[] = [
     { value: "light", label: "Claro", icon: Sun },
@@ -12,7 +13,15 @@ const MODES: { value: ReaderMode; label: string; icon: typeof Sun }[] = [
     { value: "sepia", label: "Intermedio", icon: Sunset },
 ]
 
-export function ThemeToggle() {
+type ThemeToggleProps = {
+    /** "segmented": los tres modos visibles. "cycle": un único botón que
+     *  rota entre modos (para barras estrechas en mobile). "responsive":
+     *  cycle en mobile y segmented desde sm. */
+    variant?: "segmented" | "cycle" | "responsive"
+    className?: string
+}
+
+export function ThemeToggle({ variant = "segmented", className }: ThemeToggleProps) {
     const [mounted, setMounted] = useState(false)
     const { mode, setMode } = useThemeMode()
 
@@ -22,41 +31,58 @@ export function ThemeToggle() {
         setMounted(true)
     }, [])
 
-    if (!mounted) {
-        return (
-            <div className="flex items-center rounded-lg border p-0.5">
-                {MODES.map(({ value, label, icon: Icon }) => (
-                    <Button
-                        key={value}
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 gap-1"
-                        title={label}
-                    >
-                        <Icon className="size-3.5" />
-                        <span className="hidden sm:inline">{label}</span>
-                    </Button>
-                ))}
-            </div>
-        )
-    }
+    const activeMode: ReaderMode | null = mounted ? mode : null
 
-    return (
-        <div className="flex items-center rounded-lg border p-0.5">
+    const segmented = (
+        <div
+            className={cn(
+                "flex items-center rounded-lg border p-0.5",
+                variant === "responsive" && "hidden sm:flex",
+                variant !== "responsive" && className
+            )}
+            role="group"
+            aria-label="Tema"
+        >
             {MODES.map(({ value, label, icon: Icon }) => (
                 <Button
                     key={value}
                     size="sm"
-                    variant={mode === value ? "secondary" : "ghost"}
+                    variant={activeMode === value ? "secondary" : "ghost"}
                     className="h-7 gap-1"
                     onClick={() => setMode(value)}
-                    aria-pressed={mode === value}
+                    aria-pressed={activeMode === value}
                     title={label}
                 >
                     <Icon className="size-3.5" />
-                    <span className="hidden sm:inline">{label}</span>
+                    <span className="hidden md:inline">{label}</span>
                 </Button>
             ))}
+        </div>
+    )
+
+    const currentIndex = Math.max(0, MODES.findIndex((m) => m.value === activeMode))
+    const current = MODES[currentIndex]
+    const next = MODES[(currentIndex + 1) % MODES.length]
+    const CurrentIcon = current.icon
+
+    const cycle = (
+        <Button
+            size="icon-sm"
+            variant="outline"
+            className={cn(variant === "responsive" && "sm:hidden", variant !== "responsive" && className)}
+            onClick={() => setMode(next.value)}
+            aria-label={`Tema: ${current.label}. Cambiar a ${next.label}`}
+        >
+            <CurrentIcon className="size-4" />
+        </Button>
+    )
+
+    if (variant === "segmented") return segmented
+    if (variant === "cycle") return cycle
+    return (
+        <div className={cn("contents", className)}>
+            {cycle}
+            {segmented}
         </div>
     )
 }

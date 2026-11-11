@@ -1,4 +1,5 @@
 import { auth } from "@/auth"
+import { prisma } from "@/lib/prisma"
 import { isBlobUrl } from "@/lib/blob-url"
 import {
   getFromCache,
@@ -8,18 +9,37 @@ import {
 } from "@/lib/blob-cache"
 import { NextRequest, NextResponse } from "next/server"
 
-function parseRange(
-  rangeHeader: string,
-  fileSize: number
-): { start: number; end: number } | null {
-  const match = rangeHeader.match(/^bytes=(\d+)-(\d*)$/)
-  if (!match) return null
+type ParsedRange = { start: number; end: number } | "unsatisfiable" | null
 
-  const start = parseInt(match[1], 10)
-  const end = match[2] ? parseInt(match[2], 10) : fileSize - 1
+/** Interpreta una cabecera Range de un único rango (RFC 9110).
+ *  - `null`: cabecera no soportada → se responde el archivo completo (200).
+ *  - `"unsatisfiable"`: rango fuera del archivo → 416.
+ *  Un `end` mayor al tamaño se recorta (lo permite la RFC). */
+function parseRange(rangeHeader: string, fileSize: number): ParsedRange {
+  const match = rangeHeader.match(/^bytes=(\d*)-(\d*)$/)
+  if (!match || (!match[1] && !match[2])) return null
 
-  if (start >= fileSize || end >= fileSize || start > end) return null
+  let start: number
+  let end: number
+  if (!match[1]) {
+    // Sufijo: últimos N bytes
+    const suffix = parseInt(match[2], 10)
+    if (suffix === 0) return "unsatisfiable"
+    start = Math.max(0, fileSize - suffix)
+    end = fileSize - 1
+  } else {
+    start = parseInt(match[1], 10)
+    end = match[2] ? Math.min(parseInt(match[2], 10), fileSize - 1) : fileSize - 1
+  }
+
+  if (start >= fileSize || start > end) return "unsatisfiable"
   return { start, end }
+}
+
+function unsatisfiable(fileSize: number) {
+  const headers = new Headers()
+  headers.set("content-range", `bytes */${fileSize}`)
+  return new NextResponse(null, { status: 416, headers })
 }
 
 function cacheHeaders(): Headers {
@@ -97,7 +117,8 @@ async function fetchFullFile(targetUrl: string, token: string) {
 
 export async function GET(request: NextRequest) {
   const session = await auth()
-  if (!session?.user) {
+  const userId = session?.user?.id
+  if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
@@ -113,6 +134,16 @@ export async function GET(request: NextRequest) {
 
   const targetUrl = parsedUrl.href
 
+  // Solo se sirven archivos de libros del propio usuario: sin este control
+  // cualquier sesión válida podía leer blobs privados ajenos conociendo la URL.
+  const owned = await prisma.book.findFirst({
+    where: { userId, blobUrl: { in: Array.from(new Set([rawUrl, targetUrl])) } },
+    select: { id: true },
+  })
+  if (!owned) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 })
+  }
+
   const token = process.env.BLOB_READ_WRITE_TOKEN
   if (!token) {
     return NextResponse.json(
@@ -127,6 +158,7 @@ export async function GET(request: NextRequest) {
     const cachedSize = await getCacheSize(targetUrl)
     if (cachedSize !== null) {
       const parsed = parseRange(rangeHeader, cachedSize)
+      if (parsed === "unsatisfiable") return unsatisfiable(cachedSize)
       if (parsed) {
         const cached = await getFromCacheRange(targetUrl, parsed.start, parsed.end)
         if (cached) {
@@ -176,6 +208,7 @@ export async function GET(request: NextRequest) {
 
   if (rangeHeader) {
     const parsed = parseRange(rangeHeader, buffer.length)
+    if (parsed === "unsatisfiable") return unsatisfiable(buffer.length)
     if (parsed) {
       const sliced = buffer.subarray(parsed.start, parsed.end + 1)
       return new NextResponse(new Uint8Array(sliced), {

@@ -11,6 +11,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { createFolder } from "@/app/actions/library"
+import { TEXT_INPUT_CLASS } from "@/lib/utils"
 
 export function NewFolderDialog() {
   const [open, setOpen] = useState(false)
@@ -38,34 +39,46 @@ export function NewFolderDialog() {
       <Button
         size="lg"
         variant="outline"
-        onClick={() => setOpen(true)}
+        onClick={() => {
+          setError(null)
+          setOpen(true)
+        }}
+        aria-label="Nueva carpeta"
       >
         <FolderPlus className="size-4" />
-        Nueva Carpeta
+        <span className="hidden sm:inline">Nueva carpeta</span>
+        <span className="sm:hidden">Carpeta</span>
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Nueva Carpeta</DialogTitle>
+            <DialogTitle>Nueva carpeta</DialogTitle>
           </DialogHeader>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleCreate()
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleCreate()
             }}
-            placeholder="Nombre de la carpeta"
-            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            autoFocus
-          />
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <DialogFooter showCloseButton>
-            <Button onClick={handleCreate} disabled={isPending}>
-              {isPending ? "Creando..." : "Crear"}
-            </Button>
-          </DialogFooter>
+            className="grid gap-4"
+          >
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Nombre de la carpeta"
+              aria-label="Nombre de la carpeta"
+              className={TEXT_INPUT_CLASS}
+              maxLength={100}
+              autoFocus
+            />
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <DialogFooter showCloseButton>
+              <Button type="submit" disabled={isPending || !name.trim()}>
+                {isPending ? "Creando..." : "Crear"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </>

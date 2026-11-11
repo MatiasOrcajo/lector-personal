@@ -86,6 +86,18 @@ export function PdfViewer({
   const { mode } = useThemeMode()
   const { zoomMode, setZoomMode, zoom, setZoom } = usePdfViewerSettings()
 
+  /** El panel de miniaturas solo se ve desde lg. Antes se montaba igual en
+   *  mobile (oculto por CSS) y renderizaba páginas en segundo plano. */
+  const [showThumbnails, setShowThumbnails] = useState(false)
+  useEffect(() => {
+    const mql = window.matchMedia("(min-width: 1024px)")
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setShowThumbnails(mql.matches)
+    const handler = (e: MediaQueryListEvent) => setShowThumbnails(e.matches)
+    mql.addEventListener("change", handler)
+    return () => mql.removeEventListener("change", handler)
+  }, [])
+
   // ──────────────────────────────────────────────
   //  @estado-paginas Página actual y total del documento
   //  @keyword pagina-actual, total-paginas, numPages
@@ -119,7 +131,7 @@ export function PdfViewer({
   //  @estado-resaltados Selección de texto, popover, resaltados y sidebar
   //  @keyword resaltado, seleccion-texto, popover, rects, anotacion, sidebar
   // ──────────────────────────────────────────────
-  const [popover, setPopover] = useState<{ x: number; y: number } | null>(null)
+  const [popover, setPopover] = useState<{ x: number; y: number; bottom: number } | null>(null)
   const [selectionText, setSelectionText] = useState<string>("")
   const [highlights, setHighlights] = useState<PdfHighlight[]>([])
   const [highlightsLoaded, setHighlightsLoaded] = useState(false)
@@ -214,6 +226,8 @@ export function PdfViewer({
         }
       }
       setHighlights(pdfItems)
+      setHighlightsLoaded(true)
+    }).catch(() => {
       setHighlightsLoaded(true)
     })
   }, [bookId, highlightsLoaded])
@@ -312,11 +326,19 @@ export function PdfViewer({
 
   const scale = useMemo(() => {
     if (!viewport) return null
-    const pad = 32
+    // scrollSize viene de contentRect, que ya excluye el padding del
+    // contenedor: antes se restaba de nuevo y en mobile se perdían 32px.
+    const pad = 2
     const cw = Math.max(scrollSize.width - pad, 100)
-    if (zoomMode === "fit-width" || zoomMode === "fit-page") {
-      const refWidth = pageSizes?.[0] ? pageSizes[0].width : viewport.width
-      return cw / refWidth
+    const ref = pageSizes?.[0] ?? viewport
+    if (zoomMode === "fit-width") {
+      return cw / ref.width
+    }
+    if (zoomMode === "fit-page") {
+      // Antes era idéntico a "Ajustar ancho": ahora la página entera entra
+      // en el alto visible.
+      const ch = Math.max(scrollSize.height - pad, 100)
+      return Math.min(cw / ref.width, ch / ref.height)
     }
     return zoom
   }, [viewport, zoomMode, zoom, scrollSize, pageSizes])
@@ -463,13 +485,16 @@ export function PdfViewer({
         goTo(numPagesRef.current ?? 1)
       }
 
+      // Ctrl/Cmd +/- es el zoom del navegador: no interferir.
+      if (e.ctrlKey || e.metaKey || e.altKey) return
+
+      // En modos "ajustar" se parte de la escala real visible, no de 100%.
+      const cur = zoomMode === "custom" ? zoom : (scale ?? 1)
       if (e.key === "+" || e.key === "=") {
-        const cur = zoomMode === "custom" ? zoom : 1
         const next = ZOOM_STEPS.find((s) => s > cur + 0.001) ?? 2
         setZoom(next)
         setZoomMode("custom")
       } else if (e.key === "-") {
-        const cur = zoomMode === "custom" ? zoom : 1
         const next = [...ZOOM_STEPS].reverse().find((s) => s < cur - 0.001) ?? 0.5
         setZoom(next)
         setZoomMode("custom")
@@ -477,7 +502,7 @@ export function PdfViewer({
     }
     window.addEventListener("keydown", onKeyDown)
     return () => window.removeEventListener("keydown", onKeyDown)
-  }, [goTo, zoomMode, zoom, setZoomMode, setZoom])
+  }, [goTo, zoomMode, zoom, scale, setZoomMode, setZoom])
 
   const findPageElement = useCallback((node: Node | null): HTMLElement | null => {
     if (!node) return null
@@ -507,10 +532,11 @@ export function PdfViewer({
     if (rects.length === 0) return
 
     selectionRangeRef.current = range.cloneRange()
-    const firstRect = rects[0]
+    const bounds = range.getBoundingClientRect()
     setPopover({
-      x: firstRect.left + firstRect.width / 2,
-      y: firstRect.top,
+      x: bounds.left + bounds.width / 2,
+      y: bounds.top,
+      bottom: bounds.bottom,
     })
     setSelectionText(text)
   }, [findPageElement])
@@ -598,6 +624,8 @@ export function PdfViewer({
             },
           ])
         }
+      }).catch(() => {
+        // error de red: el resaltado no se guardó y no se muestra
       })
 
       window.getSelection()?.removeAllRanges()
@@ -664,72 +692,6 @@ export function PdfViewer({
     setReturnTarget(null)
   }, [returnTarget, goTo])
 
-  useEffect(() => {
-    const container = scrollRef.current
-    if (!container || highlights.length === 0) return
-
-    let observer: MutationObserver | null = null
-    let attempts = 0
-    const maxAttempts = 20
-
-    const boldHighlights = () => {
-      const highlightEls = container.querySelectorAll<HTMLElement>(
-        "[data-highlight-id]"
-      )
-      if (highlightEls.length === 0) return
-
-      const byPage = new Map<HTMLElement, HTMLElement[]>()
-      highlightEls.forEach((hlEl) => {
-        const wrapper = hlEl.closest<HTMLElement>("[data-page-index]")
-        if (!wrapper) return
-        const list = byPage.get(wrapper) ?? []
-        list.push(hlEl)
-        byPage.set(wrapper, list)
-      })
-
-      byPage.forEach((els, wrapper) => {
-        const textSpans = wrapper.querySelectorAll<HTMLElement>(
-          ".react-pdf__Page__textContent span"
-        )
-        if (textSpans.length === 0) return
-        els.forEach((hlEl) => {
-          const hlBounds = hlEl.getBoundingClientRect()
-          textSpans.forEach((span) => {
-            const spanBounds = span.getBoundingClientRect()
-            const overlap = !(
-              spanBounds.right < hlBounds.left ||
-              spanBounds.left > hlBounds.right ||
-              spanBounds.bottom < hlBounds.top ||
-              spanBounds.top > hlBounds.bottom
-            )
-            if (overlap) {
-              span.style.fontWeight = "bold"
-            }
-          })
-        })
-      })
-    }
-
-    const tryBold = () => {
-      if (container.querySelector(".react-pdf__Page__textContent")) {
-        boldHighlights()
-      } else if (attempts < maxAttempts) {
-        attempts++
-        setTimeout(tryBold, 150)
-      }
-    }
-
-    observer = new MutationObserver(() => {
-      tryBold()
-    })
-    observer.observe(container, { childList: true, subtree: true })
-    tryBold()
-
-    return () => {
-      observer?.disconnect()
-    }
-  }, [highlights, scale])
-
   const renderHighlightOverlays = (h: PdfHighlight, scaleValue: number) =>
     h.pdfRects?.map((rect, i) => (
       <div
@@ -753,7 +715,7 @@ export function PdfViewer({
   //  @keyword render, JSX, layout, header, main, sidebar, popover
   // ──────────────────────────────────────────────
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-background">
+    <div className="flex h-dvh flex-col overflow-hidden bg-background">
       <ReaderHeader
         title={title}
         currentPage={pageNumber}
@@ -766,7 +728,7 @@ export function PdfViewer({
         <select
           value={String(zoomMode === "custom" ? zoom : zoomMode)}
           onChange={(e) => handleZoomChange(e.target.value)}
-          className="h-7 rounded-md border border-input bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+          className="h-7 rounded-md border border-input bg-background px-2 text-base text-foreground outline-none sm:text-sm focus-visible:ring-2 focus-visible:ring-ring/50"
           aria-label="Zoom"
         >
           {ZOOM_OPTIONS.map((option) => (
@@ -821,7 +783,7 @@ export function PdfViewer({
              *  con scroll interno, página en lectura marcada por defecto y
              *  click para navegar. Solo visible en desktop (≥ lg).
              *  @keyword miniaturas, vista-previa, panel, Adobe, pagina-activa */}
-            {pageSizes && (
+            {pageSizes && showThumbnails && (
               <PdfThumbnails
                 pageSizes={pageSizes}
                 currentPage={pageNumber}
@@ -833,7 +795,7 @@ export function PdfViewer({
                 ref={scrollRef}
                 onScroll={handleScroll}
                 onMouseUp={handleMouseUp}
-                className="min-h-0 flex-1 overflow-auto bg-muted/40 p-4"
+                className="min-h-0 flex-1 overflow-auto bg-muted/40 p-2 sm:p-4"
               >
                 {!scale || !offsets || !scaledSizes ? (
                 <div className="flex items-center gap-2 py-20 text-muted-foreground">
@@ -926,6 +888,7 @@ export function PdfViewer({
         <HighlightPopover
           x={popover.x}
           y={popover.y}
+          bottom={popover.bottom}
           onSelect={handleColorSelect}
           onClose={() => {
             setPopover(null)

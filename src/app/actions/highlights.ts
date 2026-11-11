@@ -16,13 +16,35 @@ type CreateHighlightInput = {
   pageLabel?: string
 }
 
+const HIGHLIGHT_COLORS: readonly string[] = ["yellow", "green", "blue", "pink", "orange"]
+const MAX_HIGHLIGHT_LENGTH = 10_000
+const MAX_RECTS = 500
+
+function isValidRects(rects: unknown): boolean {
+  return (
+    Array.isArray(rects) &&
+    rects.length <= MAX_RECTS &&
+    rects.every(
+      (r) =>
+        r !== null &&
+        typeof r === "object" &&
+        ["x", "y", "width", "height"].every((k) =>
+          Number.isFinite((r as Record<string, unknown>)[k])
+        )
+    )
+  )
+}
+
 export async function createHighlight(input: CreateHighlightInput) {
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: "Unauthorized" }
 
-  const trimmed = input.text.trim()
+  const trimmed = input.text.trim().slice(0, MAX_HIGHLIGHT_LENGTH)
   if (!trimmed) return { error: "Text cannot be empty" }
+  if (!HIGHLIGHT_COLORS.includes(input.color)) return { error: "Invalid color" }
+  if (!input.cfi && input.pdfPage == null) return { error: "Missing location" }
+  if (input.pdfRects && !isValidRects(input.pdfRects)) return { error: "Invalid rects" }
 
   const book = await prisma.book.findFirst({
     where: { id: input.bookId, userId },
@@ -36,7 +58,9 @@ export async function createHighlight(input: CreateHighlightInput) {
       color: input.color,
       cfi: input.cfi ?? null,
       pdfPage: input.pdfPage ?? null,
-      pdfRects: input.pdfRects ?? undefined,
+      pdfRects:
+        input.pdfRects?.map(({ x, y, width, height }) => ({ x, y, width, height })) ??
+        undefined,
       pageLabel: input.pageLabel ?? null,
       userId,
       bookId: input.bookId,

@@ -131,4 +131,37 @@ test.describe("EPUB viewer", () => {
     await flowButton.click()
     await expect(flowButton).toContainText(/Desplazar|Scr/)
   })
+
+  test("applies the saved font size and keeps the theme after toggling flow", async ({
+    page,
+  }) => {
+    await setAuthCookie(page, userId)
+    await page.addInitScript(() => {
+      localStorage.setItem("theme", "dark")
+      localStorage.setItem(
+        "viewer-settings",
+        JSON.stringify({ fontSize: 130, epubFlow: "paginated" })
+      )
+    })
+    await page.goto(`/read/${epubBookId}`)
+    const frame = page.frameLocator(".epub-viewer iframe").first()
+    await expect(frame.locator("h1")).toBeVisible({ timeout: 20_000 })
+
+    const readBodyStyle = () =>
+      page.evaluate(() => {
+        const doc = document.querySelector<HTMLIFrameElement>(".epub-viewer iframe")
+          ?.contentDocument
+        if (!doc?.body) return null
+        return {
+          bg: doc.defaultView!.getComputedStyle(doc.body).backgroundColor,
+          fontSize: doc.body.style.fontSize,
+        }
+      })
+
+    await expect.poll(readBodyStyle).toEqual({ bg: "rgb(17, 19, 24)", fontSize: "130%" })
+
+    await page.getByRole("button", { name: /Modo de lectura/ }).click()
+    await expect(frame.locator("h1")).toBeVisible({ timeout: 20_000 })
+    await expect.poll(readBodyStyle).toEqual({ bg: "rgb(17, 19, 24)", fontSize: "130%" })
+  })
 })

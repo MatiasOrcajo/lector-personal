@@ -80,7 +80,7 @@ export function HighlightSidebar({
                                     <Button
                                         variant="ghost"
                                         size="icon-xs"
-                                        className="size-6 text-muted-foreground hover:text-destructive"
+                                        className="size-8 text-muted-foreground hover:text-destructive sm:size-6"
                                         onClick={() => onDelete(h)}
                                         aria-label="Eliminar resaltado"
                                     >

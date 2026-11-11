@@ -14,7 +14,12 @@ const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 function getInitialMode(): ReaderMode {
   if (typeof window === "undefined") return "light"
-  const stored = window.localStorage.getItem(STORAGE_KEY)
+  let stored: string | null = null
+  try {
+    stored = window.localStorage.getItem(STORAGE_KEY)
+  } catch {
+    // localStorage bloqueado (modo privado / cookies deshabilitadas)
+  }
   if (stored === "dark" || stored === "sepia") return stored
   if (
     stored === null &&
@@ -34,7 +39,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     if (mode !== "light") {
       root.classList.add(mode)
     }
-    window.localStorage.setItem(STORAGE_KEY, mode)
+    try {
+      window.localStorage.setItem(STORAGE_KEY, mode)
+    } catch {
+      // ignore
+    }
   }, [mode])
 
   return (

@@ -18,7 +18,8 @@ export async function deleteBook(bookId: string) {
   if (!book) return { error: "Book not found" }
 
   try {
-    await del(book.blobUrl)
+    // También se borra la portada: antes quedaba huérfana en Blob.
+    await del([book.blobUrl, book.coverUrl].filter(Boolean) as string[])
   } catch {
     // blob deletion failed but we still want to delete the DB record
   }
@@ -40,7 +41,7 @@ export async function renameBook(bookId: string, displayTitle: string) {
   const userId = session?.user?.id
   if (!userId) return { error: "Unauthorized" }
 
-  const trimmed = displayTitle.trim()
+  const trimmed = displayTitle.trim().slice(0, 300)
   if (!trimmed) return { error: "Name cannot be empty" }
 
   const book = await prisma.book.findFirst({
@@ -63,7 +64,7 @@ export async function createFolder(name: string) {
   const userId = session?.user?.id
   if (!userId) return { error: "Unauthorized" }
 
-  const trimmed = name.trim()
+  const trimmed = name.trim().slice(0, 100)
   if (!trimmed) return { error: "Folder name cannot be empty" }
 
   await prisma.folder.create({
@@ -79,7 +80,7 @@ export async function renameFolder(folderId: string, name: string) {
   const userId = session?.user?.id
   if (!userId) return { error: "Unauthorized" }
 
-  const trimmed = name.trim()
+  const trimmed = name.trim().slice(0, 100)
   if (!trimmed) return { error: "Folder name cannot be empty" }
 
   const folder = await prisma.folder.findFirst({
@@ -97,7 +98,13 @@ export async function renameFolder(folderId: string, name: string) {
   return { success: true }
 }
 
-export async function deleteFolder(folderId: string) {
+/** Elimina una carpeta. Por defecto los libros vuelven a la biblioteca
+ *  (folderId → null por la relación onDelete: SetNull); con
+ *  `deleteBooks: true` también se borran los libros y sus archivos. */
+export async function deleteFolder(
+  folderId: string,
+  options: { deleteBooks?: boolean } = {}
+) {
   const session = await auth()
   const userId = session?.user?.id
   if (!userId) return { error: "Unauthorized" }
@@ -108,28 +115,32 @@ export async function deleteFolder(folderId: string) {
   })
   if (!folder) return { error: "Folder not found" }
 
+  if (!options.deleteBooks) {
+    await prisma.folder.delete({ where: { id: folderId } })
+    revalidatePath("/")
+    return { success: true }
+  }
+
   const books = await prisma.book.findMany({
     where: { folderId, userId },
     select: { blobUrl: true, coverUrl: true },
   })
 
-  const blobUrls = books.map((b) => b.blobUrl)
+  const blobUrls = books.flatMap((b) => [b.blobUrl, b.coverUrl].filter(Boolean) as string[])
   if (blobUrls.length > 0) {
     try {
       await del(blobUrls)
     } catch {
       // blob deletion failed but we still delete the DB records
     }
+    // clean local cache for all books in folder
+    deleteManyFromCache(blobUrls).catch(() => {})
   }
 
-  // clean local cache for all books in folder
-  const cacheUrls = books.flatMap((b) => [b.blobUrl, b.coverUrl].filter(Boolean) as string[])
-  if (cacheUrls.length > 0) {
-    deleteManyFromCache(cacheUrls).catch(() => {})
-  }
-
-  await prisma.book.deleteMany({ where: { folderId, userId } })
-  await prisma.folder.delete({ where: { id: folderId } })
+  await prisma.$transaction([
+    prisma.book.deleteMany({ where: { folderId, userId } }),
+    prisma.folder.delete({ where: { id: folderId } }),
+  ])
 
   revalidatePath("/")
   return { success: true }

@@ -76,7 +76,7 @@ export function ReaderWrapper({
     }
 
     return (
-        <div className="flex h-screen items-center justify-center bg-background text-muted-foreground">
+        <div className="flex h-dvh items-center justify-center bg-background text-muted-foreground">
             Formato no soportado: {format}
         </div>
     )

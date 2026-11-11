@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { renameFolder, deleteFolder } from "@/app/actions/library"
+import { TEXT_INPUT_CLASS } from "@/lib/utils"
 
 type FolderCardProps = {
   id: string
@@ -37,6 +38,10 @@ export function FolderCard({ id, name, bookCount }: FolderCardProps) {
   function handleRename() {
     const trimmed = renameValue.trim()
     if (!trimmed) return
+    if (trimmed === name) {
+      setRenameOpen(false)
+      return
+    }
     startTransition(async () => {
       const result = await renameFolder(id, trimmed)
       if (result.error) {
@@ -47,39 +52,44 @@ export function FolderCard({ id, name, bookCount }: FolderCardProps) {
     })
   }
 
-  function handleDelete() {
+  function handleDelete(deleteBooks: boolean) {
     startTransition(async () => {
-      const result = await deleteFolder(id)
-      if (result.error) setError(result.error)
+      const result = await deleteFolder(id, { deleteBooks })
+      if (result.error) {
+        setError(result.error)
+      } else {
+        setDeleteOpen(false)
+      }
     })
   }
 
+  const booksLabel = `${bookCount} ${bookCount === 1 ? "libro" : "libros"}`
+
   return (
     <>
-      <div className="relative">
-        <Link href={`/?folder=${id}`} className="block">
-          <div className="group flex items-center gap-3 rounded-xl bg-muted/30 px-4 py-3 transition-colors hover:bg-muted/50">
+      <div className={isPending ? "relative opacity-60 transition-opacity" : "relative"}>
+        <Link href={`/?folder=${id}`} className="block rounded-xl focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+          <div className="group flex items-center gap-3 rounded-xl bg-muted/30 py-3 pl-4 pr-10 transition-colors hover:bg-muted/50">
             <Folder className="size-6 shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{name}</p>
-              <p className="text-xs text-muted-foreground">
-                {bookCount} {bookCount === 1 ? "libro" : "libros"}
-              </p>
+              <p className="truncate text-sm font-medium" title={name}>{name}</p>
+              <p className="text-xs text-muted-foreground">{booksLabel}</p>
             </div>
           </div>
         </Link>
-        <div className="absolute right-1 top-1 z-10">
+        <div className="absolute right-1.5 top-1/2 z-10 -translate-y-1/2">
           <DropdownMenu>
             <DropdownMenuTrigger
               render={
                 <Button
                   variant="ghost"
-                  size="icon-xs"
-                  className="bg-background/80 hover:bg-background"
+                  size="icon-sm"
+                  className="hover:bg-background"
+                  aria-label={`Opciones de la carpeta ${name}`}
                 />
               }
             >
-              <MoreVertical className="size-3.5" />
+              <MoreVertical className="size-4" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem
@@ -87,6 +97,7 @@ export function FolderCard({ id, name, bookCount }: FolderCardProps) {
                   e.preventDefault()
                   e.stopPropagation()
                   setRenameValue(name)
+                  setError(null)
                   setRenameOpen(true)
                 }}
                 disabled={isPending}
@@ -100,6 +111,7 @@ export function FolderCard({ id, name, bookCount }: FolderCardProps) {
                 onClick={(e) => {
                   e.preventDefault()
                   e.stopPropagation()
+                  setError(null)
                   setDeleteOpen(true)
                 }}
                 disabled={isPending}
@@ -117,22 +129,29 @@ export function FolderCard({ id, name, bookCount }: FolderCardProps) {
           <DialogHeader>
             <DialogTitle>Renombrar carpeta</DialogTitle>
           </DialogHeader>
-          <input
-            type="text"
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleRename()
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleRename()
             }}
-            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            autoFocus
-          />
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <DialogFooter showCloseButton>
-            <Button onClick={handleRename} disabled={isPending}>
-              {isPending ? "Guardando..." : "Guardar"}
-            </Button>
-          </DialogFooter>
+            className="grid gap-4"
+          >
+            <input
+              type="text"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              className={TEXT_INPUT_CLASS}
+              aria-label="Nombre de la carpeta"
+              maxLength={100}
+              autoFocus
+            />
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <DialogFooter showCloseButton>
+              <Button type="submit" disabled={isPending || !renameValue.trim()}>
+                {isPending ? "Guardando..." : "Guardar"}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
 
@@ -142,14 +161,31 @@ export function FolderCard({ id, name, bookCount }: FolderCardProps) {
             <DialogTitle>Eliminar carpeta</DialogTitle>
             <DialogDescription>
               {bookCount > 0
-                ? `Esta carpeta contiene ${bookCount} ${bookCount === 1 ? "libro" : "libros"}. Al eliminarla se borraran todos los archivos.`
-                : `Seguro que quieres eliminar "${name}"?`}
+                ? `"${name}" contiene ${booksLabel}. Puedes eliminar solo la carpeta (los libros vuelven a la biblioteca) o eliminarla junto con sus libros.`
+                : `¿Seguro que quieres eliminar "${name}"?`}
             </DialogDescription>
           </DialogHeader>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <DialogFooter showCloseButton>
-            <Button variant="destructive" onClick={handleDelete} disabled={isPending}>
-              {isPending ? "Eliminando..." : "Eliminar"}
+            {bookCount > 0 && (
+              <Button
+                variant="destructive"
+                onClick={() => handleDelete(true)}
+                disabled={isPending}
+              >
+                Eliminar carpeta y libros
+              </Button>
+            )}
+            <Button
+              variant={bookCount > 0 ? "default" : "destructive"}
+              onClick={() => handleDelete(false)}
+              disabled={isPending}
+            >
+              {isPending
+                ? "Eliminando..."
+                : bookCount > 0
+                  ? "Eliminar solo la carpeta"
+                  : "Eliminar"}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -10,13 +10,18 @@ const COVER_PDF_SCALE = 1.6
 
 export async function renderPdfCover(data: ArrayBuffer): Promise<string> {
   const doc = await pdfjs.getDocument({ data }).promise
-  const page = await doc.getPage(1)
-  const viewport = page.getViewport({ scale: COVER_PDF_SCALE })
-  const canvas = document.createElement("canvas")
-  canvas.width = Math.floor(viewport.width)
-  canvas.height = Math.floor(viewport.height)
-  await page.render({ canvas, viewport }).promise
-  return canvas.toDataURL("image/jpeg", COVER_JPEG_QUALITY)
+  try {
+    const page = await doc.getPage(1)
+    const viewport = page.getViewport({ scale: COVER_PDF_SCALE })
+    const canvas = document.createElement("canvas")
+    canvas.width = Math.floor(viewport.width)
+    canvas.height = Math.floor(viewport.height)
+    await page.render({ canvas, viewport }).promise
+    return canvas.toDataURL("image/jpeg", COVER_JPEG_QUALITY)
+  } finally {
+    // Libera el documento en el worker (antes cada portada lo dejaba en memoria).
+    void doc.destroy()
+  }
 }
 
 function joinPath(dir: string, href: string): string {

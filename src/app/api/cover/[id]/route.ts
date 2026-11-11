@@ -4,6 +4,18 @@ import { isBlobUrl } from "@/lib/blob-url"
 import { getFromCache, saveToCache } from "@/lib/blob-cache"
 import { NextRequest, NextResponse } from "next/server"
 
+/** La portada es privada (requiere sesión): no debe guardarse en caches
+ *  compartidas. Además puede ser un SVG extraído de un EPUB, así que se sirve
+ *  con CSP restrictiva y nosniff para que abrirla directamente no ejecute JS. */
+function coverHeaders(contentType: string): Headers {
+  const headers = new Headers()
+  headers.set("content-type", contentType)
+  headers.set("cache-control", "private, max-age=31536000, immutable")
+  headers.set("x-content-type-options", "nosniff")
+  headers.set("content-security-policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+  return headers
+}
+
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -34,10 +46,10 @@ export async function GET(
   // try cache first
   const cached = await getFromCache(targetStr)
   if (cached) {
-    const headers = new Headers()
-    headers.set("content-type", cached.contentType)
-    headers.set("cache-control", "public, max-age=31536000, immutable")
-    return new NextResponse(new Uint8Array(cached.buffer), { status: 200, headers })
+    return new NextResponse(new Uint8Array(cached.buffer), {
+      status: 200,
+      headers: coverHeaders(cached.contentType),
+    })
   }
 
   const token = process.env.BLOB_READ_WRITE_TOKEN
@@ -68,9 +80,8 @@ export async function GET(
   // cache for next time
   saveToCache(targetStr, buffer, contentType).catch(() => {})
 
-  const responseHeaders = new Headers()
-  responseHeaders.set("content-type", contentType)
-  responseHeaders.set("cache-control", "public, max-age=31536000, immutable")
-
-  return new NextResponse(new Uint8Array(buffer), { status: 200, headers: responseHeaders })
+  return new NextResponse(new Uint8Array(buffer), {
+    status: 200,
+    headers: coverHeaders(contentType),
+  })
 }

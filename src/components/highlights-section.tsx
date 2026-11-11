@@ -104,7 +104,7 @@ export function HighlightsSection({ highlights: initialHighlights }: HighlightsS
                   <Button
                     variant="ghost"
                     size="icon-xs"
-                    className="size-6 shrink-0 text-muted-foreground hover:text-destructive"
+                    className="size-8 shrink-0 text-muted-foreground hover:text-destructive sm:size-6"
                     onClick={() => handleDelete(h.id)}
                     disabled={isPending}
                     aria-label="Eliminar resaltado"

@@ -52,7 +52,6 @@ export function PageNav({ currentPage, totalPages, onNavigate }: PageNavProps) {
 
     return (
         <div className="flex items-center gap-1.5">
-            <span className="hidden sm:contents">
             <Button
                 variant="outline"
                 size="sm"
@@ -62,7 +61,6 @@ export function PageNav({ currentPage, totalPages, onNavigate }: PageNavProps) {
             >
                 <ChevronLeft className="size-4"/>
             </Button>
-            </span>
             <input
                 type="text"
                 inputMode="numeric"
@@ -71,13 +69,14 @@ export function PageNav({ currentPage, totalPages, onNavigate }: PageNavProps) {
                 onFocus={handleFocus}
                 onBlur={handleBlur}
                 onKeyDown={handleKeyDown}
-                className="h-7 w-10 rounded-md border border-input bg-background text-center text-xs text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:w-12 sm:text-sm"
+                // text-base en mobile: iOS hace zoom automático al enfocar
+                // inputs con fuente menor a 16px.
+                className="h-7 w-12 rounded-md border border-input bg-background text-center text-base text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/50 sm:text-sm"
                 aria-label="Ir a página"
             />
             <span className="text-xs tabular-nums text-muted-foreground sm:text-sm">
                 / {totalPages ?? "—"}
             </span>
-            <span className="hidden sm:contents">
             <Button
                 variant="outline"
                 size="sm"
@@ -87,7 +86,6 @@ export function PageNav({ currentPage, totalPages, onNavigate }: PageNavProps) {
             >
                 <ChevronRight className="size-4"/>
             </Button>
-            </span>
         </div>
     )
 }

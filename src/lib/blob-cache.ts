@@ -1,6 +1,6 @@
 import { createHash } from "crypto"
 import { join } from "path"
-import { mkdir, readFile, writeFile, unlink, stat, open as fsOpen } from "fs/promises"
+import { mkdir, readFile, writeFile, unlink, stat, rename, open as fsOpen } from "fs/promises"
 
 const CACHE_DIR = process.env.VERCEL
   ? join("/tmp", "blob-cache")
@@ -39,9 +39,22 @@ async function readMeta(key: string): Promise<CacheMeta | null> {
   }
 }
 
+/** Escribe a un temporal y renombra: así un lector concurrente nunca ve un
+ *  archivo a medio escribir (rename es atómico en el mismo filesystem). */
+async function writeAtomic(path: string, data: Buffer | string): Promise<void> {
+  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`
+  try {
+    await writeFile(tmp, data)
+    await rename(tmp, path)
+  } catch (error) {
+    await unlink(tmp).catch(() => {})
+    throw error
+  }
+}
+
 async function writeMeta(key: string, meta: CacheMeta): Promise<void> {
   await ensureCacheDir()
-  await writeFile(getMetaPath(key), JSON.stringify(meta), "utf-8")
+  await writeAtomic(getMetaPath(key), JSON.stringify(meta))
 }
 
 async function deleteMeta(key: string): Promise<void> {
@@ -78,12 +91,16 @@ export async function getFromCacheRange(
     const actualEnd = Math.min(end, fileStat.size - 1)
     const length = actualEnd - start + 1
 
+    if (length <= 0) return null
+
     const buf = Buffer.alloc(length)
     const handle = await fsOpen(filePath, "r")
-    await handle.read(buf, 0, length, start)
-    await handle.close()
-
-    return { buffer: buf, contentType: meta.contentType }
+    try {
+      const { bytesRead } = await handle.read(buf, 0, length, start)
+      return { buffer: buf.subarray(0, bytesRead), contentType: meta.contentType }
+    } finally {
+      await handle.close()
+    }
   } catch {
     return null
   }
@@ -92,6 +109,9 @@ export async function getFromCacheRange(
 export async function getCacheSize(url: string): Promise<number | null> {
   try {
     const key = getCacheKey(url)
+    // Sin meta la entrada no está completa (la meta se escribe al final).
+    const meta = await readMeta(key)
+    if (!meta) return null
     const fileStat = await stat(getFilePath(key))
     return fileStat.size
   } catch {
@@ -106,10 +126,9 @@ export async function saveToCache(
 ): Promise<void> {
   const key = getCacheKey(url)
   await ensureCacheDir()
-  await Promise.all([
-    writeFile(getFilePath(key), buffer),
-    writeMeta(key, { contentType }),
-  ])
+  // Primero el contenido y después la meta: la meta marca la entrada como válida.
+  await writeAtomic(getFilePath(key), buffer)
+  await writeMeta(key, { contentType })
 }
 
 export async function deleteFromCache(url: string): Promise<void> {

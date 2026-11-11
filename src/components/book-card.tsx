@@ -10,7 +10,7 @@ import {
   CardDescription,
   CardContent,
 } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -26,10 +26,12 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog"
 import { BookCover } from "@/components/book-cover"
 import { deleteBook, renameBook, moveBookToFolder } from "@/app/actions/library"
+import { TEXT_INPUT_CLASS } from "@/lib/utils"
 
 type Folder = { id: string; name: string }
 
@@ -56,6 +58,7 @@ export function BookCard({
 }: BookCardProps) {
   const [isPending, startTransition] = useTransition()
   const [renameOpen, setRenameOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [renameValue, setRenameValue] = useState(displayTitle ?? title)
   const [error, setError] = useState<string | null>(null)
 
@@ -64,13 +67,21 @@ export function BookCard({
   function handleDelete() {
     startTransition(async () => {
       const result = await deleteBook(id)
-      if (result.error) setError(result.error)
+      if (result.error) {
+        setError(result.error)
+      } else {
+        setDeleteOpen(false)
+      }
     })
   }
 
   function handleRename() {
     const trimmed = renameValue.trim()
     if (!trimmed) return
+    if (trimmed === shownTitle) {
+      setRenameOpen(false)
+      return
+    }
     startTransition(async () => {
       const result = await renameBook(id, trimmed)
       if (result.error) {
@@ -90,32 +101,37 @@ export function BookCard({
 
   return (
     <>
-      <Card size="sm">
+      <Card size="sm" className={isPending ? "opacity-60 transition-opacity" : undefined}>
         <div className="relative">
-          <BookCover
-            id={id}
-            title={shownTitle}
-            format={format}
-            coverUrl={coverUrl}
-            blobUrl={blobUrl}
-          />
+          {/* La portada también abre el libro: antes solo el botón "Leer". */}
+          <Link href={`/read/${id}`} aria-label={`Leer ${shownTitle}`} tabIndex={-1}>
+            <BookCover
+              id={id}
+              title={shownTitle}
+              format={format}
+              coverUrl={coverUrl}
+              blobUrl={blobUrl}
+            />
+          </Link>
           <div className="absolute right-1 top-1">
             <DropdownMenu>
               <DropdownMenuTrigger
                 render={
                   <Button
                     variant="ghost"
-                    size="icon-xs"
-                    className="bg-background/80 hover:bg-background"
+                    size="icon-sm"
+                    className="bg-background/80 shadow-xs hover:bg-background"
+                    aria-label={`Opciones de ${shownTitle}`}
                   />
                 }
               >
-                <MoreVertical className="size-3.5" />
+                <MoreVertical className="size-4" />
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem
                   onClick={() => {
-                    setRenameValue(displayTitle ?? title)
+                    setRenameValue(shownTitle)
+                    setError(null)
                     setRenameOpen(true)
                   }}
                   disabled={isPending}
@@ -154,7 +170,10 @@ export function BookCard({
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   variant="destructive"
-                  onClick={handleDelete}
+                  onClick={() => {
+                    setError(null)
+                    setDeleteOpen(true)
+                  }}
                   disabled={isPending}
                 >
                   <Trash2 />
@@ -165,17 +184,23 @@ export function BookCard({
           </div>
         </div>
         <CardHeader>
-          <CardTitle className="truncate text-sm">{shownTitle}</CardTitle>
+          <CardTitle className="truncate text-sm" title={shownTitle}>
+            {shownTitle}
+          </CardTitle>
           <CardDescription className="uppercase text-xs">
             {format}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Link href={`/read/${id}`}>
-            <Button variant="outline" size="sm" className="w-full">
-              Leer
-            </Button>
+          <Link
+            href={`/read/${id}`}
+            className={buttonVariants({ variant: "outline", size: "sm", className: "w-full" })}
+          >
+            Leer
           </Link>
+          {error && !renameOpen && !deleteOpen && (
+            <p className="mt-2 text-xs text-destructive">{error}</p>
+          )}
         </CardContent>
       </Card>
 
@@ -184,20 +209,46 @@ export function BookCard({
           <DialogHeader>
             <DialogTitle>Renombrar</DialogTitle>
           </DialogHeader>
-          <input
-            type="text"
-            value={renameValue}
-            onChange={(e) => setRenameValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") handleRename()
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleRename()
             }}
-            className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            autoFocus
-          />
+            className="grid gap-4"
+          >
+            <input
+              type="text"
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              className={TEXT_INPUT_CLASS}
+              aria-label="Nuevo nombre"
+              maxLength={300}
+              autoFocus
+            />
+            {error && <p className="text-sm text-destructive">{error}</p>}
+            <DialogFooter showCloseButton>
+              <Button type="submit" disabled={isPending || !renameValue.trim()}>
+                {isPending ? "Guardando..." : "Guardar"}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Antes "Eliminar" borraba el libro (archivo y resaltados) sin confirmar. */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Eliminar libro</DialogTitle>
+            <DialogDescription>
+              Se eliminará &ldquo;{shownTitle}&rdquo; junto con sus resaltados.
+              Esta acción no se puede deshacer.
+            </DialogDescription>
+          </DialogHeader>
           {error && <p className="text-sm text-destructive">{error}</p>}
           <DialogFooter showCloseButton>
-            <Button onClick={handleRename} disabled={isPending}>
-              {isPending ? "Guardando..." : "Guardar"}
+            <Button variant="destructive" onClick={handleDelete} disabled={isPending}>
+              {isPending ? "Eliminando..." : "Eliminar"}
             </Button>
           </DialogFooter>
         </DialogContent>

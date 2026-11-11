@@ -66,4 +66,21 @@ describe("ReaderHeader", () => {
     expect(screen.getByTitle("Oscuro")).toBeInTheDocument()
     expect(screen.getByTitle("Intermedio")).toBeInTheDocument()
   })
+
+  it("offers a compact theme button that cycles modes (mobile)", async () => {
+    const user = userEvent.setup()
+    renderHeader()
+    const cycle = screen.getByRole("button", { name: /^Tema: Claro/ })
+    await user.click(cycle)
+    expect(screen.getByRole("button", { name: /^Tema: Oscuro/ })).toBeInTheDocument()
+    expect(document.documentElement.classList.contains("dark")).toBe(true)
+  })
+
+  it("shows the full title on hover when truncated", () => {
+    renderHeader({ title: "Un título muy largo" })
+    expect(screen.getByRole("heading", { name: "Un título muy largo" })).toHaveAttribute(
+      "title",
+      "Un título muy largo"
+    )
+  })
 })

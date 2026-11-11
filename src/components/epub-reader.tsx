@@ -29,7 +29,7 @@ import {
     type ReaderMode,
 } from "@/lib/viewer-settings"
 import type {ReaderHighlight} from "@/lib/reader-types"
-import {LoaderCircle, Minus, Plus} from "lucide-react"
+import {BookOpen, LoaderCircle, Minus, Plus, ScrollText} from "lucide-react"
 
 /** @epub-reader-props Props del visor EPUB.
  *  @keyword props, url, titulo, libro, ubicacion-inicial */
@@ -251,7 +251,16 @@ export function EpubReader({
     const renditionRef = useRef<Rendition | null>(null)
     const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
     const lastLocationRef = useRef<string | null>(initialLocation)
-    const [renditionReady, setRenditionReady] = useState(false)
+    /** @rendition-version Se incrementa cada vez que react-reader entrega una
+     *  Rendition nueva (montaje inicial y cada cambio de fluidez, que remonta
+     *  el ReactReader por su `key`). Los efectos de tema, fuente y resaltados
+     *  dependen de este contador: con un booleano "ready" la segunda rendition
+     *  quedaba sin tema, sin tamaño de fuente y sin resaltados.
+     *  @keyword rendition, version, remount, fluidez, tema, fuente */
+    const [renditionVersion, setRenditionVersion] = useState(0)
+    /** Ventana (iframe) donde vive la selección actual del EPUB, para poder
+     *  limpiarla: window.getSelection() del documento padre no la alcanza. */
+    const selectionWindowRef = useRef<Window | null>(null)
 
     useEffect(() => {
         locationRef.current = location
@@ -281,7 +290,7 @@ export function EpubReader({
     //  @estado-resaltados Selección de texto, popover y resaltados
     //  @keyword resaltado, seleccion-texto, popover, CFI, anotacion
     // ──────────────────────────────────────────────
-    const [popover, setPopover] = useState<{ x: number; y: number } | null>(null)
+    const [popover, setPopover] = useState<{ x: number; y: number; bottom: number } | null>(null)
     const [selectionCfi, setSelectionCfi] = useState<string>("")
     const [selectionText, setSelectionText] = useState<string>("")
     const [epubHighlights, setEpubHighlights] = useState<ReaderHighlight[]>([])
@@ -418,17 +427,6 @@ export function EpubReader({
             }
         })
 
-        const contents = rendition.getContents() as unknown as {
-            document?: Document;
-            window?: { document?: Document }
-        }[]
-        contents.forEach((content) => {
-            const doc = content.document ?? content.window?.document
-            if (!doc) return
-            const layer = doc.querySelector(".epubjs-annotation-layer")
-            if (layer) layer.innerHTML = ""
-        })
-
         applyHighlightsToRendition(rendition, items)
     }, [applyHighlightsToRendition])
 
@@ -454,28 +452,24 @@ export function EpubReader({
                 }
             }
 
+            epubHighlightsRef.current = epubItems
             setEpubHighlights(epubItems)
             setHighlightsLoaded(true)
-
-            epubHighlightsRef.current = epubItems
-
-            const rendition = renditionRef.current
-            if (rendition) {
-                applyHighlightsToRendition(rendition, epubItems)
-            }
+        }).catch(() => {
+            // Sin resaltados, pero el lector sigue funcionando.
+            setHighlightsLoaded(true)
         })
-    }, [bookId, highlightsLoaded, applyHighlightsToRendition])
+    }, [bookId, highlightsLoaded])
 
-    /** @resaltado-epub-ready Aplica resaltados cuando la rendition y los datos
-     *  de la DB ya están disponibles. Cubre el caso en que la rendition se
-     *  inicializa después de que los highlights ya fueron cargados.
+    /** @resaltado-epub-ready (Re)aplica los resaltados cuando hay una rendition
+     *  nueva, cuando terminan de cargar desde la DB o cuando cambia el modo
+     *  (el color efectivo depende del tema, p. ej. amarillo en sepia).
+     *  refreshAllAnnotations borra antes de agregar, así no se duplican.
      *  @keyword rendition-ready, aplicar-resaltados, sincronizacion-estado */
     useEffect(() => {
-        if (!renditionReady || !highlightsLoaded) return
-        const rendition = renditionRef.current
-        if (!rendition) return
-        applyHighlightsToRendition(rendition, epubHighlightsRef.current)
-    }, [renditionReady, highlightsLoaded, applyHighlightsToRendition])
+        if (renditionVersion === 0 || !highlightsLoaded) return
+        refreshAllAnnotations()
+    }, [renditionVersion, highlightsLoaded, mode, refreshAllAnnotations])
 
     // ──────────────────────────────────────────────
     //  @navegacion-ubicacion Callback de cambio de ubicación del ReactReader.
@@ -558,7 +552,9 @@ export function EpubReader({
     // ──────────────────────────────────────────────
     const getRendition = useCallback((rendition: Rendition) => {
         renditionRef.current = rendition
-        setRenditionReady(true)
+        // Rendition nueva = libro nuevo en epub.js: sus locations se regeneran.
+        locationsReadyRef.current = false
+        setRenditionVersion((v) => v + 1)
 
         // Detectamos dónde apoya el dedo el usuario
         rendition.on("touchstart", (event: TouchEvent) => {
@@ -573,6 +569,12 @@ export function EpubReader({
         rendition.on("touchend", (event: TouchEvent) => {
             const touch = event.changedTouches?.[0] || event.touches?.[0]
             if (!touch) return
+
+            // Si el usuario está seleccionando texto (arrastrando los
+            // manejadores de selección) no hay que pasar de página.
+            const doc = (event.target as Node | null)?.ownerDocument
+            const sel = doc?.getSelection()
+            if (sel && !sel.isCollapsed) return
 
             const deltaX = touch.screenX - touchStartXRef.current
             const deltaY = touch.screenY - touchStartYRef.current
@@ -658,8 +660,9 @@ export function EpubReader({
 
             setSelectionCfi(cfiRange)
             setSelectionText(text)
+            selectionWindowRef.current = contents.window
 
-            const firstRect = rects[0]
+            const bounds = range.getBoundingClientRect()
 
             // Capturamos el iframe donde epub.js renderiza el libro
             const iframe = contents.window.frameElement as HTMLIFrameElement | null
@@ -670,8 +673,9 @@ export function EpubReader({
             const offsetY = iframeRect?.top ?? 0
 
             setPopover({
-                x: offsetX + firstRect.left + (firstRect.width / 2),
-                y: offsetY + firstRect.top, // Removimos window.scrollY porque el tooltip usa 'fixed'
+                x: offsetX + bounds.left + (bounds.width / 2),
+                y: offsetY + bounds.top, // Sin window.scrollY porque el tooltip usa 'fixed'
+                bottom: offsetY + bounds.bottom,
             })
         })
     }, [])
@@ -687,7 +691,7 @@ export function EpubReader({
     // ──────────────────────────────────────────────
     useEffect(() => {
         const rendition = renditionRef.current
-        if (!rendition || !highlightsLoaded) return
+        if (!rendition) return
 
         const contents = rendition.getContents() as unknown as {
             document?: Document;
@@ -714,43 +718,11 @@ export function EpubReader({
             "a:link": {color: mode === "light" ? "#1a4fd8" : "#8ab4f8"},
         })
         rendition.themes.select(mode)
-
-        contents.forEach((content) => {
-            const doc = content.document ?? content.window?.document
-            if (!doc) return
-            try {
-                const styleId = "lector-highlight-overrides"
-                const existing = doc.getElementById(styleId)
-                if (existing) existing.remove()
-
-                // 1. CREAMOS la etiqueta style SIEMPRE (sin importar el modo de lectura)
-                const style = doc.createElement("style")
-                style.id = styleId
-
-                // 2. Definimos la regla de mezcla para que el texto resalte por encima del color
-                let cssText = `
-            .epubjs-hl {
-                pointer-events: none !important;
-                mix-blend-mode: ${mode === 'dark' ? 'screen' : 'multiply'} !important;
-            }
-        `
-
-                // 3. Mantenemos tu regla original SUMÁNDOLA al CSS solo si es modo sepia
-                if (mode === "sepia") {
-                    cssText += `
-                .epubjs-hl[data-color="yellow"] { fill: rgba(200, 155, 40, 0.55) !important; }
-            `
-                }
-
-                // 4. Asignamos todo el CSS al elemento style y lo inyectamos
-                style.textContent = cssText
-                doc.head.appendChild(style)
-
-            } catch {
-                // ignore cross-origin
-            }
-        })
-    }, [mode, renditionReady, highlightsLoaded])
+        // Nota: los resaltados de epub.js se dibujan en un SVG del documento
+        // padre (marks-pane), no dentro del iframe, así que su color se ajusta
+        // con getEffectiveHighlightColor al (re)aplicarlos y no con CSS
+        // inyectado en el iframe.
+    }, [mode, renditionVersion])
 
     // ──────────────────────────────────────────────
     //  @cambio-fuente Aplica el tamaño de fuente a la rendition cuando cambia.
@@ -760,7 +732,9 @@ export function EpubReader({
         const rendition = renditionRef.current
         if (!rendition) return
         rendition.themes.fontSize(`${settings.fontSize}%`)
-    }, [settings.fontSize, refreshAllAnnotations])
+        // renditionVersion: aplica el tamaño guardado al abrir el libro y tras
+        // cambiar la fluidez (antes solo se aplicaba al tocar +/-).
+    }, [settings.fontSize, renditionVersion])
 
     // ──────────────────────────────────────────────
     //  @marcar-seccion-activa Marca en el TOC del ReactReader el item de la
@@ -914,6 +888,20 @@ export function EpubReader({
         }
     }, [])
 
+    /** @limpiar-seleccion Quita la selección de texto. La selección del EPUB
+     *  vive dentro del iframe de epub.js, por eso window.getSelection() del
+     *  documento padre no la borraba y el texto quedaba seleccionado.
+     *  @keyword seleccion, iframe, limpiar, removeAllRanges */
+    const clearSelection = useCallback(() => {
+        try {
+            selectionWindowRef.current?.getSelection()?.removeAllRanges()
+        } catch {
+            // iframe ya destruido
+        }
+        selectionWindowRef.current = null
+        window.getSelection()?.removeAllRanges()
+    }, [])
+
     // ──────────────────────────────────────────────
     //  @crear-resaltado-epub Procesa la selección de color del popover.
     //  Crea el resaltado visual en la rendition de epub.js y persiste en la DB
@@ -934,7 +922,7 @@ export function EpubReader({
             const text = selectionText
 
             // Cleanup inmediato de la selección y popover
-            window.getSelection()?.removeAllRanges()
+            clearSelection()
             setPopover(null)
             setSelectionText("")
             setSelectionCfi("")
@@ -966,14 +954,28 @@ export function EpubReader({
                     ? `Página ${currentPage}`
                     : undefined
 
+            const removeTemporary = () => {
+                try {
+                    renditionRef.current?.annotations.remove(cfi, "highlight")
+                } catch {
+                    // puede no existir
+                }
+            }
+
             createHighlight({
                 bookId,
                 text,
                 color,
                 cfi,
                 pageLabel,
-            }).then((result) => {
-                if (result.success && result.highlight) {
+            }).catch(() => ({error: "network"} as const)).then((result) => {
+                if (!("success" in result) || !result.success || !result.highlight) {
+                    // No se guardó: quitar el resaltado temporal para no
+                    // mostrar algo que desaparecerá al recargar.
+                    removeTemporary()
+                    return
+                }
+                {
                     const realId = result.highlight.id
 
                     // Reemplazar la anotación temporal por una con el ID real de la DB.
@@ -992,8 +994,7 @@ export function EpubReader({
                             "highlight-" + realId,
                             {
                                 fill: getEffectiveHighlightColor(color, modeRef.current),
-                                "fill-opacity": "0.5",
-                                "mix-blend-mode": "multiply",
+                                "fill-opacity": "0.4",
                             }
                         )
                     }
@@ -1011,7 +1012,7 @@ export function EpubReader({
                 }
             })
         },
-        [bookId, selectionCfi, selectionText]
+        [bookId, selectionCfi, selectionText, clearSelection]
     )
 
     // ──────────────────────────────────────────────
@@ -1071,7 +1072,7 @@ export function EpubReader({
     //  @keyword render, JSX, layout, header, main, sidebar, popover
     // ──────────────────────────────────────────────
     return (
-        <div className="flex h-screen flex-col overflow-hidden bg-background">
+        <div className="flex h-dvh flex-col overflow-hidden bg-background">
             <ReaderHeader
                 title={title}
                 currentPage={epubCurrentPage}
@@ -1105,12 +1106,23 @@ export function EpubReader({
                     >
                         <Plus className="size-4"/>
                     </Button>
-                    <Button variant="outline" size="sm" onClick={toggleFlow}>
-                        <span className="hidden sm:inline">
+                    {/* En mobile se muestra solo el ícono (antes "Pag"/"Scr",
+                        poco claro); el nombre accesible indica el modo. */}
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={toggleFlow}
+                        aria-label={`Modo de lectura: ${settings.epubFlow === "paginated" ? "Páginas" : "Desplazar"}`}
+                        title={settings.epubFlow === "paginated" ? "Cambiar a desplazamiento continuo" : "Cambiar a páginas"}
+                        suppressHydrationWarning
+                    >
+                        {settings.epubFlow === "paginated" ? (
+                            <BookOpen className="size-4"/>
+                        ) : (
+                            <ScrollText className="size-4"/>
+                        )}
+                        <span className="hidden sm:inline" suppressHydrationWarning>
                             {settings.epubFlow === "paginated" ? "Páginas" : "Desplazar"}
-                        </span>
-                        <span className="sm:hidden text-xs">
-                            {settings.epubFlow === "paginated" ? "Pag" : "Scr"}
                         </span>
                     </Button>
                 </div>
@@ -1212,11 +1224,12 @@ export function EpubReader({
                     x={popover.x}
                     y={popover.y}
                     onSelect={handleEpubColorSelect}
+                    bottom={popover.bottom}
                     onClose={() => {
                         setPopover(null)
                         setSelectionText("")
                         setSelectionCfi("")
-                        window.getSelection()?.removeAllRanges()
+                        clearSelection()
                     }}
                 />
             )}

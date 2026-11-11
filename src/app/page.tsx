@@ -6,7 +6,7 @@ import { NewFolderDialog } from "@/components/new-folder-dialog"
 import { buttonVariants } from "@/components/ui/button"
 import { logOut } from "@/app/actions/auth"
 import { ThemeToggle } from "@/components/theme-toggle"
-import { BookOpen, Highlighter, LogOut, Folder } from "lucide-react"
+import { ArrowLeft, BookOpen, Highlighter, LogOut, Folder } from "lucide-react"
 import { Suspense } from "react"
 import { prisma } from "@/lib/prisma"
 import Link from "next/link"
@@ -50,31 +50,37 @@ export default async function Home({
   }
 
   return (
-    <div className="mx-auto w-full max-w-6xl px-4 py-8">
-      <header className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-2">
-          <BookOpen className="size-6 text-primary" />
-          <h1 className="text-xl font-semibold">Lector Personal</h1>
+    <div className="mx-auto w-full max-w-6xl px-4 py-5 sm:py-8">
+      {/* Mobile: fila 1 = título / tema / salir, fila 2 = acciones a lo
+          ancho. Desktop: todo en una fila. */}
+      <header className="mb-6 flex flex-wrap items-center gap-2 sm:mb-8 sm:gap-3">
+        <div className="order-1 mr-auto flex min-w-0 items-center gap-2">
+          <BookOpen className="size-6 shrink-0 text-primary" />
+          <h1 className="truncate text-xl font-semibold">Lector Personal</h1>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          {session?.user?.name && (
-            <span className="text-sm text-muted-foreground">
-              Hola, {session.user.name}
-            </span>
-          )}
-          <ThemeToggle />
-          <UploadButton />
+        {session?.user?.name && (
+          <span className="order-2 hidden text-sm text-muted-foreground lg:inline">
+            Hola, {session.user.name}
+          </span>
+        )}
+        <div className="order-3 flex">
+          <ThemeToggle variant="responsive" />
+        </div>
+        <div className="order-5 flex w-full flex-wrap items-center gap-2 *:data-[slot=button]:flex-1 sm:order-4 sm:w-auto sm:gap-3 sm:*:data-[slot=button]:flex-none">
+          <UploadButton folderId={folderName ? folder : null} />
           <NewFolderDialog />
-          <form action={logOut}>
-            <button
-              type="submit"
-              className={buttonVariants({ variant: "outline", size: "lg" })}
-            >
-              <LogOut className="size-4" />
-              Cerrar sesion
-            </button>
-          </form>
         </div>
+        <form action={logOut} className="order-4 sm:order-5">
+          <button
+            type="submit"
+            className={buttonVariants({ variant: "outline", size: "lg" })}
+            aria-label="Cerrar sesión"
+            title="Cerrar sesión"
+          >
+            <LogOut className="size-4" />
+            <span className="hidden sm:inline">Cerrar sesión</span>
+          </button>
+        </form>
       </header>
 
       <nav className="mb-6 flex gap-1 border-b">
@@ -116,30 +122,31 @@ export default async function Home({
         ) : (
           <>
             {folder && folderName && (
-              <div className="mb-4 flex items-center gap-2">
+              <nav aria-label="Ruta" className="mb-4 flex min-w-0 items-center gap-1">
                 <Link
                   href="/"
-                  className="text-sm text-muted-foreground hover:text-foreground"
+                  className="-ml-2 flex items-center gap-1 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
+                  <ArrowLeft className="size-4" />
                   Biblioteca
                 </Link>
                 <span className="text-sm text-muted-foreground">/</span>
-                <span className="flex items-center gap-1 text-sm font-medium">
-                  <Folder className="size-3.5" />
-                  {folderName}
+                <span className="flex min-w-0 items-center gap-1 text-sm font-medium">
+                  <Folder className="size-3.5 shrink-0" />
+                  <span className="truncate">{folderName}</span>
                 </span>
-              </div>
+              </nav>
             )}
             {!folder && (
               <h2 className="mb-4 text-lg font-medium">Biblioteca</h2>
             )}
             <Suspense
               fallback={
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-                  {Array.from({ length: 4 }).map((_, i) => (
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 lg:grid-cols-4 xl:grid-cols-5">
+                  {Array.from({ length: 5 }).map((_, i) => (
                     <div
                       key={i}
-                      className="h-[120px] animate-pulse rounded-xl bg-muted"
+                      className="aspect-[3/5] animate-pulse rounded-xl bg-muted"
                     />
                   ))}
                 </div>
